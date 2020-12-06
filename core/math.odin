@@ -65,6 +65,10 @@ v3 :: proc { v3xyz, v3s, v3z, v3xy_z };
 
 Vector4 :: la.Vector4;
 
+v4s :: inline proc(xyzw : f32 = 0) -> Vector4 {
+    return Vector4{ xyzw, xyzw, xyzw, xyzw };
+}
+
 v4xyzw :: inline proc(x, y, z, w: f32) -> Vector4 {
     return Vector4{ x, y, z, w };
 }
