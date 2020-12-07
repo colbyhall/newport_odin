@@ -16,8 +16,15 @@ Window_Handle :: win32.Hwnd;
 @export AmdPowerXpressRequestHighPerformance : u32 = 0x01;
 
 win_proc :: proc "c" (hwnd: win32.Hwnd, msg: u32, wparam: win32.Wparam, lparam: win32.Lparam) -> win32.Lresult {
-    context = default_context();
-    window := &engine.window;
+    c : ^runtime.Context = cast(^runtime.Context)uintptr(win32.get_window_long_ptr_a(hwnd, win32.GWLP_USERDATA));
+
+    if c == nil do return win32.def_window_proc_a(hwnd, msg, wparam, lparam);
+
+    context = c^;
+
+    window : ^Window = cast(^Window)context.user_ptr;
+
+    if window == nil do return win32.def_window_proc_a(hwnd, msg, wparam, lparam);
 
     @static surrogate_pair_first : u32 = 0;
 
@@ -27,7 +34,7 @@ win_proc :: proc "c" (hwnd: win32.Hwnd, msg: u32, wparam: win32.Wparam, lparam: 
 
         e.window = window;
 
-        dispatch_event(&dispatcher, &e);
+        dispatch_event(&window.dispatcher, &e);
     case win32.WM_SIZING, win32.WM_SIZE:
         e : Window_Resize_Event;
         
@@ -41,7 +48,7 @@ win_proc :: proc "c" (hwnd: win32.Hwnd, msg: u32, wparam: win32.Wparam, lparam: 
         window.width  = cast(int)(rect.right - rect.left);
         window.height = cast(int)(rect.bottom - rect.top);
 
-        dispatch_event(&dispatcher, &e);
+        dispatch_event(&window.dispatcher, &e);
     case win32.WM_SYSKEYDOWN, win32.WM_KEYDOWN, win32.WM_SYSKEYUP, win32.WM_KEYUP:
         e : Key_Event;
 
@@ -49,7 +56,7 @@ win_proc :: proc "c" (hwnd: win32.Hwnd, msg: u32, wparam: win32.Wparam, lparam: 
         e.key     = cast(u8)wparam;
         e.pressed = !cast(bool)((lparam >> 31) & 0x1); // 31st bit of lparam is transition state
 
-        dispatch_event(&dispatcher, &e);
+        dispatch_event(&window.dispatcher, &e);
     case win32.WM_LBUTTONDOWN, win32.WM_RBUTTONDOWN, win32.WM_MBUTTONDOWN:
         e : Mouse_Button_Event;
 
@@ -67,7 +74,7 @@ win_proc :: proc "c" (hwnd: win32.Hwnd, msg: u32, wparam: win32.Wparam, lparam: 
 
         SetCapture(hwnd);
 
-        dispatch_event(&dispatcher, &e);
+        dispatch_event(&window.dispatcher, &e);
     case win32.WM_LBUTTONUP, win32.WM_RBUTTONUP, win32.WM_MBUTTONUP:
         e : Mouse_Button_Event;
 
@@ -85,7 +92,7 @@ win_proc :: proc "c" (hwnd: win32.Hwnd, msg: u32, wparam: win32.Wparam, lparam: 
 
         ReleaseCapture();
 
-        dispatch_event(&dispatcher, &e);
+        dispatch_event(&window.dispatcher, &e);
     case win32.WM_MOUSEMOVE: 
         e : Mouse_Move_Event;
 
@@ -93,14 +100,14 @@ win_proc :: proc "c" (hwnd: win32.Hwnd, msg: u32, wparam: win32.Wparam, lparam: 
         e.mouse_x = cast(int)(lparam & 0xffff);
         e.mouse_y = -cast(int)((lparam >> 16) & 0xffff) + window.height;
 
-        dispatch_event(&dispatcher, &e);
+        dispatch_event(&window.dispatcher, &e);
     case win32.WM_MOUSEWHEEL:
         e : Mouse_Wheel_Event;
 
         e.window = window;
         e.delta = (i16)(wparam >> 16);
 
-        dispatch_event(&dispatcher, &e);
+        dispatch_event(&window.dispatcher, &e);
     case win32.WM_CHAR:
         e : Char_Event;
 
@@ -123,7 +130,7 @@ win_proc :: proc "c" (hwnd: win32.Hwnd, msg: u32, wparam: win32.Wparam, lparam: 
 
         e.char = cast(rune)char;
 
-        dispatch_event(&dispatcher, &e);
+        dispatch_event(&window.dispatcher, &e);
     }
 
     return win32.def_window_proc_a(hwnd, msg, wparam, lparam); // @TODO(colby): Error handler
@@ -175,28 +182,37 @@ make_window :: proc(title: string, width: int, height: int) -> (window: Window, 
     return;
 }
 
-show_window :: proc(should_show: bool) {
-    show_flag := should_show ? win32.SW_SHOW : 0;
-    win32.show_window(engine.window.handle, auto_cast show_flag);
+delete_window :: proc(window: ^Window) {
+    win32.destroy_window(window.handle);
 }
 
-max_window :: proc() {
-    win32.show_window(engine.window.handle, 3);
+show_window :: proc(using window: ^Window, should_show: bool) {
+    show_flag := should_show ? win32.SW_SHOW : 0;
+    win32.show_window(handle, auto_cast show_flag);
+}
+
+max_window :: proc(using window: ^Window) {
+    win32.show_window(handle, 3);
     
     rect : win32.Rect;
-    win32.get_client_rect(engine.window.handle, &rect);
+    win32.get_client_rect(handle, &rect);
 
-    engine.window.width  = cast(int)(rect.right - rect.left);
-    engine.window.height = cast(int)(rect.bottom - rect.top);
+    width  = cast(int)(rect.right - rect.left);
+    height = cast(int)(rect.bottom - rect.top);
 }
 
-swap_window_buffer :: proc() {
-    window_context := win32.get_dc(engine.window.handle);
-    defer win32.release_dc(engine.window.handle, window_context);
+swap_window_buffer :: proc(using window: ^Window) {
+    window_context := win32.get_dc(handle);
+    defer win32.release_dc(handle, window_context);
     win32.swap_buffers(window_context);
 }
 
-poll_events :: proc() {
+poll_events :: proc(using window: ^Window) {
+    c := context;
+    c.user_ptr = rawptr(window);
+
+    win32.set_window_long_ptr_a(handle, win32.GWLP_USERDATA, win32.Long_Ptr(uintptr(&c)));
+
     msg : win32.Msg;
     for win32.peek_message_a(&msg, nil, 0, 0, win32.PM_REMOVE) {
         win32.translate_message(&msg);
@@ -229,30 +245,31 @@ MONITOR_DPI_TYPE :: enum {
 Set_Process_DPI_Awareness :: proc "c" (v: PROCESS_DPI_AWARENESS) -> win32.Hresult;
 Get_DPI_For_Monitor :: proc "c" (m: win32.Hmonitor, t: MONITOR_DPI_TYPE, dpiX: ^u32, dpiY: ^u32) -> win32.Hresult;
 
-@private
-sys_init :: proc() {
-    using dynlib;
+// TODO: Redo this as a window proc
+// @private
+// sys_init :: proc() {
+//     using dynlib;
 
-    shcore, found := load_library("shcore.dll");
-    if found {
-        defer unload_library(shcore);
+//     shcore, found := load_library("shcore.dll");
+//     if found {
+//         defer unload_library(shcore);
 
-        func, ok := symbol_address(shcore, "SetProcessDpiAwareness");
-        SetProcessDpiAwareness := cast(Set_Process_DPI_Awareness)func;
-        if ok do SetProcessDpiAwareness(.PROCESS_SYSTEM_DPI_AWARE);
+//         func, ok := symbol_address(shcore, "SetProcessDpiAwareness");
+//         SetProcessDpiAwareness := cast(Set_Process_DPI_Awareness)func;
+//         if ok do SetProcessDpiAwareness(.PROCESS_SYSTEM_DPI_AWARE);
 
-        monitor := win32.monitor_from_window(nil, 1);
-        func, ok = symbol_address(shcore, "GetDpiForMonitor");
-        GetDpiForMonitor := cast(Get_DPI_For_Monitor)func;
-        if ok {
-            dpiX, dpiY : u32;
-            GetDpiForMonitor(monitor, .MDT_EFFECTIVE_DPI, &dpiX, &dpiY);
-            engine.dpi_scale = f32(dpiX) / 96.0;
-        }
-    } else {
-        engine.dpi_scale = 1;
-    }
-}
+//         monitor := win32.monitor_from_window(nil, 1);
+//         func, ok = symbol_address(shcore, "GetDpiForMonitor");
+//         GetDpiForMonitor := cast(Get_DPI_For_Monitor)func;
+//         if ok {
+//             dpiX, dpiY : u32;
+//             GetDpiForMonitor(monitor, .MDT_EFFECTIVE_DPI, &dpiX, &dpiY);
+//             engine.dpi_scale = f32(dpiX) / 96.0;
+//         }
+//     } else {
+//         engine.dpi_scale = 1;
+//     }
+// }
 
 // Os's caret blink time in seconds
 caret_blink_time :: proc() -> f32 {

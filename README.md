@@ -1,6 +1,11 @@
 # Newport 
 Newport is a modular game engine built in odin for odin. It is designed to be easily extendable and easy to use.
 
+## Features
+* Modular setup for easy extension. Also allows for select parts to be used alone.
+* GL Rendering
+* Asset Manager
+
 ## Setup
 1. Clone the repo into a desired folder
 ```sh
@@ -14,10 +19,10 @@ $ odin build example.odin -collection:newport=desired\
 ```odin
 package example
 
-import "newport:core"
+import "newport:engine"
 
 main :: proc() {
-    core_init_details := core.default_init_details("example");
-    core.init_scoped(core_init_details);
+    init_details := engine.default_init_details("test");
+    engine.init_scoped(init_details);   
 }
 ```

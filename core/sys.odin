@@ -8,8 +8,11 @@ package core
 // @see show_window
 // @see swap_window_buffer
 Window :: struct {
-    handle: Window_Handle,
-    width, height: int,
+    handle : Window_Handle,
+    width  : int,
+    height : int,
+
+    dispatcher : Event_Dispatcher,
 }
 
 // Event for when the program is requested to exit
@@ -70,5 +73,3 @@ Window_Resize_Event :: struct {
     old_width  : int,
     old_height : int,
 }
-
-dispatcher : Event_Dispatcher;

@@ -26,8 +26,8 @@ Catalog_Base :: struct {
     extensions : [dynamic]string,
     type       : typeid,
 
-    register : Register_Asset,
-    reload   : Reload_Asset,
+    register : Register,
+    reload   : Reload,
 }
 
 Catalog :: struct(T: typeid) {
@@ -40,7 +40,7 @@ asset_catalog : Asset_Catalog;
 
 all_catalogs : [dynamic]^Catalog_Base;
 
-init_catalog :: proc(catalog: ^$T/Catalog($E), name: string, register: Register_Asset, reload: Reload_Asset) {
+init_catalog :: proc(catalog: ^$T/Catalog($E), name: string, register: Register, reload: Reload) {
     catalog.name     = name;
     catalog.register = register;
     catalog.reload   = reload;
@@ -70,7 +70,7 @@ find_in_all :: proc(name: string) -> ^Asset {
 
     if !asset.loaded {
         _, id := any_data(asset.derived);
-        for it in all {
+        for it in all_catalogs {
             if it.type == id {
                 if it.reload(it, asset.name, asset.path, false) do asset.loaded = true;
                 break;
@@ -88,12 +88,12 @@ discover :: proc() {
         my_ext  := path.ext(info.name)[1:]; // advance past the .
         my_name := path.name(info.name);
 
-        for catalog in all {
+        for catalog in all_catalogs {
             _, has_ext := slice.linear_search(catalog.extensions[:], my_ext);
 
             if !has_ext do continue;
 
-            catalog.register(catalog, strings.clone(my_name), strings.clone(info.fullpath), false);
+            catalog.register(catalog, strings.clone(my_name), strings.clone(info.fullpath));
         }
 
         return 0, false;

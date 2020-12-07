@@ -5,9 +5,9 @@ foreign import "system:opengl32.lib"
 import "core:mem"
 import "core:fmt"
 import "core:log"
-import math "core:math/la"
 
 import "../../asset"
+import "../../core"
 
 GLenum      :: u32;
 GLboolean   :: u8;
@@ -154,7 +154,20 @@ GL_Context :: struct {
     bound_texture : ^Texture,
 }
 
+// GL only allows 1 context at a time on a single thread
 ctx : GL_Context;
+
+_gl_check :: proc(loc := #caller_location) {
+    if !ctx.is_valid {
+        log.errorf("[OpenGL] To do work with GL a context must be created. GL work at {} on line {}", loc.file_path, loc.line);
+        assert(false);
+    }
+
+    if ctx.thread_id != context.thread_id {
+        log.errorf("[OpenGL] To do work with GL the work must be done on the same thread the context was intiialized on. GL work at {} on line {}", loc.file_path, loc.line);
+        assert(false);
+    }
+}
 
 Shader_Variable :: struct {
     name     : string,
@@ -162,6 +175,9 @@ Shader_Variable :: struct {
     location : GLint,
 }
 
+// Wrapper structure around GL's shaders
+// 
+// @note contains data about uniforms and attributes
 Shader :: struct {
     using _ : asset.Asset,
 
@@ -171,13 +187,19 @@ Shader :: struct {
     uniforms   : []Shader_Variable,
 }
 
+// Compiles and uploads the shader to the gpu
+//
+// @returns true if the shader was compile and uploaded
 compile_shader :: proc(using shader: ^Shader, source: cstring) -> bool {
+    using extensions;
+
+    _gl_check();
+
     if source == nil {
         log.error("Tried to compile shader with no source given");
         return false;
     }
     
-    using extensions;
     id = glCreateProgram();
 
     vert_id := glCreateShader(GL_VERTEX_SHADER);
@@ -186,6 +208,7 @@ compile_shader :: proc(using shader: ^Shader, source: cstring) -> bool {
     frag_id := glCreateShader(GL_FRAGMENT_SHADER);
     defer glDeleteShader(frag_id);
 
+    // This allows us to pack vert and frag shaders in a single file
     shader_header : cstring = "#version 330 core\n#extension GL_ARB_seperate_shader_objects: enable\n";
     vert_shader   := []cstring { shader_header, "#define VERTEX 1\n", source };
     frag_shader   := []cstring { shader_header, "#define FRAGMENT 1\n", source };
@@ -223,6 +246,7 @@ compile_shader :: proc(using shader: ^Shader, source: cstring) -> bool {
         return false;
     }
 
+    // Gather up all the shaders attributes
     num_attributes : GLint;
     glGetProgramiv(id, GL_ACTIVE_ATTRIBUTES, &num_attributes);
     attributes = make([]Shader_Variable, int(num_attributes));
@@ -235,19 +259,20 @@ compile_shader :: proc(using shader: ^Shader, source: cstring) -> bool {
 
         attrib := &attributes[i];
 
-        name_len := len(cstring(name));
+        name_len := len(cstring(&name[0]));
         buffer := make([]byte, name_len + 1);
-        mem.copy(raw_data(buffer), raw_data(name), name_len);
+        mem.copy(raw_data(buffer[:]), raw_data(name[:]), name_len);
         buffer[name_len] = 0;
-        attrib.name = string(buffer[:name_len]);
 
+        attrib.name     = string(buffer[:name_len]);
         attrib.type     = type;
         attrib.location = glGetAttribLocation(id, auto_cast &name[0]);
     }
 
+    // Gather up all the shaders uniforms
     num_uniforms : GLint;
     glGetProgramiv(id, GL_ACTIVE_UNIFORMS, &num_uniforms);
-    uniforms = attributes = make([]Shader_Variable, int(num_attributes));
+    uniforms = make([]Shader_Variable, int(num_attributes));
     for i in 0..<num_uniforms {
         length : GLsizei;
         size   : GLint;
@@ -257,17 +282,155 @@ compile_shader :: proc(using shader: ^Shader, source: cstring) -> bool {
 
         uniform := &uniforms[i];
 
-        name_len := len(cstring(name));
+        name_len := len(cstring(&name[0]));
         buffer := make([]byte, name_len + 1);
-        mem.copy(raw_data(buffer), raw_data(name), name_len);
+        mem.copy(raw_data(buffer[:]), raw_data(name[:]), name_len);
         buffer[name_len] = 0;
-        attrib.name = string(buffer[:name_len]);
 
+        uniform.name     = string(buffer[:name_len]);
         uniform.type     = type;
         uniform.location = glGetUniformLocation(id, auto_cast &name[0]);
     }
 
-    // @TODO(colby): Get the shader binary len
+    return true;
+}
 
+// Sets the shader and updates our gl context
+set_shader :: proc(shader: ^Shader, loc := #caller_location) {
+    using extensions;
+
+    _gl_check(loc);
+
+    if shader != nil {
+        glUseProgram(shader.id);
+        ctx.bound_shader = shader;
+    } else {
+        glUseProgram(0);
+        ctx.bound_shader = nil;
+    }
+}
+
+find_attribute :: proc(shader: ^Shader, name: string) -> ^Shader_Variable {
+    for it, i in shader.attributes {
+        if it.name == name do return &shader.attributes[i];
+    }
+
+    return nil;
+}
+
+find_uniform :: proc(shader: ^Shader, name: string, type: GLenum) -> ^Shader_Variable {
+    for it, i in shader.uniforms {
+        if it.name == name && it.type == type do return &shader.uniforms[i];
+    }
+
+    return nil;
+}
+
+_set_uniform :: proc(name: string, type: GLenum, loc := #caller_location) -> (bound: ^Shader, uniform: ^Shader_Variable) {
+    _gl_check(loc);
+
+    bound = ctx.bound_shader;
+    if bound == nil {
+        log.errorf("[OpenGL] Tried to uniform \"{}\" when no shader was bound in {} at line {}", name, loc.file_path, loc.line);
+        return;
+    }
+
+    uniform = find_uniform(bound, name, type);
+    if uniform == nil {
+        log.errorf("[OpenGL] Could not find uniform \"{}\" in shader {} called in {} at line {}", name, bound.name, loc.file_path, loc.line);
+        return;
+    }    
+
+    return;
+}
+
+set_uniform_mat4 :: proc(name: string, m: core.Matrix4, loc := #caller_location) -> bool {
+    using extensions;
+
+    bound, uniform := _set_uniform(name, GL_FLOAT_MAT4, loc);
+    if bound == nil || uniform == nil do return false;
+
+    matrix := m;
+    glUniformMatrix4fv(uniform.location, 1, GL_FALSE, &matrix[0][0]);
+    return true;
+}
+
+set_uniform_tex :: proc(name: string, t: ^Texture, loc := #caller_location) -> bool {
+    using extensions;
+
+    bound, uniform := _set_uniform(name, GL_SAMPLER_2D, loc);
+    if bound == nil || uniform == nil do return false;
+
+    glActiveTexture(u32(GL_TEXTURE0 + uniform.location));
+    set_texture(t);
+    glUniform1i(uniform.location, uniform.location);
+
+    return true;
+}
+
+set_uniform_vec2 :: proc(name: string, a: core.Vector2, loc := #caller_location) -> bool {
+    using extensions;
+
+    bound, uniform := _set_uniform(name, GL_FLOAT_VEC2, loc);
+    if bound == nil || uniform == nil do return false;
+
+    glUniform2f(uniform.location, a.x, a.y);
+    return true;
+}
+
+set_uniform :: proc { set_uniform_mat4, set_uniform_tex, set_uniform_vec2 };
+
+Texture :: struct {
+    using _ : asset.Asset,
+
+    id      : GLuint,
+    pixels  : []u8,
+    width   : int,
+    height  : int,
+    depth   : int, 
+}
+
+set_texture :: proc(texture: ^Texture, loc := #caller_location) {
+    using extensions;
+
+    _gl_check(loc);
+
+    if texture == nil {
+        glBindTexture(GL_TEXTURE_2D, 0);
+        ctx.bound_texture = nil;
+    } else {
+        glBindTexture(GL_TEXTURE_2D, texture.id);
+        ctx.bound_texture = texture;
+    }
+}
+
+// TODO(colby): Handle all the different formatting info and such
+upload_texture :: proc(texture: ^Texture) -> bool {
+    using extensions;
+
+    if texture.id == 0 do glGenTextures(1, auto_cast &texture.id);
+
+    set_texture(texture);
+    using texture;
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    format : i32;
+    switch depth {
+    case 1:
+        format = GL_RED;
+    case 3:
+        format = GL_RGB;
+    case 4:
+        format = GL_RGBA;
+    case: 
+        panic("Unreachable");
+    }
+
+    a := format;
+    // if depth == 4 do a = GL_SRGB_ALPHA;
+
+    glTexImage2D(GL_TEXTURE_2D, 0, auto_cast a, auto_cast width, auto_cast height, 0, auto_cast format, GL_UNSIGNED_BYTE, &pixels[0]);
     return true;
 }
