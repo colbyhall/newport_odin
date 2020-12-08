@@ -169,6 +169,13 @@ _gl_check :: proc(loc := #caller_location) {
     }
 }
 
+clear :: proc(c: core.Linear_Color) {
+    _gl_check();
+    
+    glClearColor(c.r, c.g, c.b, c.a);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+}
+
 Shader_Variable :: struct {
     name     : string,
     type     : GLenum,
