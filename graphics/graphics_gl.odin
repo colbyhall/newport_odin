@@ -149,6 +149,7 @@ compile_shader :: proc(using shader: ^Shader, source: cstring) -> bool {
 
 // Sets the shader and updates our gl context
 set_shader :: proc(shader: ^Shader, loc := #caller_location) {
+    gl.check(loc);
     using gl;
     using extensions;
 
@@ -259,6 +260,7 @@ delete_pipeline :: proc(id: Pipeline_Id, loc := #caller_location) -> bool {
 
 begin_pipeline :: proc(id: Pipeline_Id, loc := #caller_location) {
     check(loc);
+    gl.check(loc);
     using state; 
 
     using gl;
@@ -387,6 +389,8 @@ Texture :: struct {
 }
 
 set_texture :: proc(texture: ^Texture, loc := #caller_location) {
+    gl.check(loc);
+
     using gl;
     using extensions;
 
