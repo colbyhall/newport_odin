@@ -15,7 +15,7 @@ main :: proc() {
 
     the_engine := engine.get();
 
-    graphics.init();
+    graphics.init(graphics.default_init_details());
     asset.discover();
 
     show_window(&the_engine.window, true);
