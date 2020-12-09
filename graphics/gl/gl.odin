@@ -43,14 +43,9 @@ GL_ACTIVE_UNIFORMS   :: 0x8B86;
 GL_ACTIVE_ATTRIBUTES :: 0x8B89;
 
 GL_ARRAY_BUFFER :: 0x8892;
-GL_LEQUAL       :: 0x0203;
 GL_DEPTH_TEST   :: 0x0B71;
 GL_CULL_FACE    :: 0x0B44;
-GL_BACK         :: 0x0405;
 GL_CCW          :: 0x0901;
-GL_BLEND        :: 0x0BE2;
-GL_SRC_ALPHA    :: 0x0302;
-GL_ONE_MINUS_SRC_ALPHA :: 0x0303;
 
 GL_STREAM_DRAW :: 0x88E0;
 
@@ -77,6 +72,38 @@ GL_FRAMEBUFFER_SRGB :: 0x8DB9;
 GL_SRGB_ALPHA       :: 0x8C42;
 GL_MULTISAMPLE_ARB  :: 0x809D;
 
+GL_FRONT            :: 0x0404;
+GL_BACK             :: 0x0405;
+GL_FRONT_AND_BACK   :: 0x0408;
+
+GL_POINT :: 0x1B00;
+GL_LINE  :: 0x1B01;
+GL_FILL  :: 0x1B02;
+
+GL_BLEND :: 0x0BE2;
+GL_BLEND_SRC :: 0x0BE1;
+GL_BLEND_DST :: 0x0BE0;
+GL_ZERO :: 0;
+GL_ONE :: 1;
+GL_SRC_COLOR :: 0x0300;
+GL_ONE_MINUS_SRC_COLOR :: 0x0301;
+GL_SRC_ALPHA :: 0x0302;
+GL_ONE_MINUS_SRC_ALPHA :: 0x0303;
+GL_DST_ALPHA :: 0x0304;
+GL_ONE_MINUS_DST_ALPHA :: 0x0305;
+GL_DST_COLOR :: 0x0306;
+GL_ONE_MINUS_DST_COLOR :: 0x0307;
+GL_SRC_ALPHA_SATURATE :: 0x0308;
+
+GL_NEVER :: 0x0200;
+GL_LESS :: 0x0201;
+GL_EQUAL :: 0x0202;
+GL_LEQUAL :: 0x0203;
+GL_GREATER :: 0x0204;
+GL_NOTEQUAL :: 0x0205;
+GL_GEQUAL :: 0x0206;
+GL_ALWAYS :: 0x0207;
+
 @(default_calling_convention = "c")
 foreign opengl32 {
     glClear         :: proc(mask: GLbitfield) ---;
@@ -88,6 +115,9 @@ foreign opengl32 {
     glColorMask     :: proc(r, g, b, a: GLboolean) ---;
     glDepthFunc     :: proc(func: GLenum) ---;
     glEnable        :: proc(cap: GLenum) ---;
+    glDisable       :: proc(cap: GLenum) ---;
+    glPolygonMode   :: proc(face, mode: GLenum) ---;
+    glLineWidth     :: proc(width: GLfloat) ---;
     // glClearDepthf :: proc(d: GLfloat) ---;
     glCullFace      :: proc(mode: GLenum) ---;
     glFrontFace     :: proc(mode: GLenum) ---;

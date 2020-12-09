@@ -59,7 +59,6 @@ Draw_Mode :: enum {
 }
 
 Cull_Mode :: enum {
-    None,
     Front,
     Back,
 }
@@ -115,7 +114,6 @@ Pipeline_Details :: struct {
     cull_mode : bit_set[Cull_Mode],
 
     color_mask : bit_set[Color_Mask],
-    depth_mask : bool,
 
     blend_enabled : bool,
 
@@ -139,7 +137,17 @@ default_pipeline_details :: proc() -> Pipeline_Details {
 
         cull_mode  = { .Back },
 
+        color_mask = { .Red, .Green, .Blue, .Alpha },
+
         blend_enabled = false,
+
+        src_color_blend_factor = .One,
+        dst_color_blend_factor = .One,
+        color_blend_op = .Add,
+
+        src_alpha_blend_factor = .One_Minus_Src_Alpha,
+        dst_alpha_blend_factor = .One,
+        alpha_blend_op = .Add,
 
         depth_test    = true,
         depth_write   = true,

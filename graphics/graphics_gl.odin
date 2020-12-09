@@ -156,10 +156,8 @@ set_shader :: proc(shader: ^Shader, loc := #caller_location) {
 
     if shader != nil {
         glUseProgram(shader.id);
-        // ctx.bound_shader = shader;
     } else {
         glUseProgram(0);
-        // ctx.bound_shader = nil;
     }
 }
 
@@ -181,20 +179,23 @@ find_uniform :: proc(shader: ^Shader, name: string, type: gl.GLenum) -> ^Shader_
 
 _set_uniform :: proc(name: string, type: gl.GLenum, loc := #caller_location) -> (bound: ^Shader, uniform: ^Shader_Variable) {
     using gl;
+    using state;
 
     check(loc);
 
-    bound = nil; // ctx.bound_shader;
-    if bound == nil {
-        log.errorf("[OpenGL] Tried to find uniform \"{}\" when no shader was bound in {} at line {}", name, loc.file_path, loc.line);
+    pipeline, ok := pipeline_manager.pipelines[pipeline_manager.active];
+    if !ok {
+        log.errorf("[OpenGL] Tried to find uniform \"{}\" when no pipeline was bound in {} at line {}", name, loc.file_path, loc.line);
         return;
     }
+
+    bound = pipeline.details.shader;
 
     uniform = find_uniform(bound, name, type);
     if uniform == nil {
         log.errorf("[OpenGL] Could not find uniform \"{}\" in shader {} called in {} at line {}", name, bound.name, loc.file_path, loc.line);
         return;
-    }    
+    }
 
     return;
 }
@@ -265,23 +266,110 @@ begin_pipeline :: proc(id: Pipeline_Id, loc := #caller_location) {
 
     pipeline, ok := pipeline_manager.pipelines[id];
     if !ok {
-        log.errorf("[Graphics] Failed to find pipeline with id of {} from {} {}", id, loc.file_path, file.line);
+        log.errorf("[Graphics] Failed to find pipeline with id of {} from {} {}", id, loc.file_path, loc.line);
         return;
     }
 
-    viewport := pipeline.viewport;
-    glViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
+    if pipeline.details.shader == nil {
+        log.errorf("[Graphics] Failed to start pipeline with id of {} due to it not having a set shader. Called from {} {}", id, loc.file_path, loc.line);
+        return;   
+    }
+
+    details := pipeline.details;
+
+    viewport := details.viewport;
+    glViewport(auto_cast viewport.min.x, auto_cast viewport.min.y, auto_cast viewport.max.x, auto_cast viewport.max.y);
     // TODO(colby): Scissor test
 
+    // Set the gl draw mode
     draw_mode : GLenum;
-    switch pipeline.draw_mode {
+    switch details.draw_mode {
     case .Fill:  draw_mode = GL_FILL;
     case .Line:  draw_mode = GL_LINE;
     case .Point: draw_mode = GL_POINT;
     }
     glPolygonMode(GL_FRONT_AND_BACK, draw_mode);
 
-    // front_cull := 
+    // Update the line width
+    glLineWidth(details.line_width);
+
+    // Set the gl cull mode
+    front_cull := .Front in details.cull_mode;
+    back_cull  := .Back in details.cull_mode;
+    cull_mode : GLenum;
+
+    if front_cull && back_cull do cull_mode = GL_FRONT_AND_BACK;
+    else if front_cull do cull_mode = GL_FRONT;
+    else if back_cull do cull_mode = GL_BACK;
+
+    if cull_mode == 0 do glDisable(GL_CULL_FACE);
+    else {
+        glEnable(GL_CULL_FACE);
+        glCullFace(cull_mode);
+    }
+
+    // Set the color mask
+    color_mask := details.color_mask;
+    mask_r := .Red in color_mask;
+    mask_g := .Green in color_mask;
+    mask_b := .Blue in color_mask;
+    mask_a := .Alpha in color_mask;
+    glColorMask(auto_cast mask_r, auto_cast mask_g, auto_cast mask_b, auto_cast mask_a);
+
+    // Set up all the blending
+    if details.blend_enabled {
+        glEnable(GL_BLEND);
+
+        blend_factor_to_gl :: proc(factor: Blend_Factor) -> GLenum {
+            switch factor {
+            case .Zero: return GL_ZERO;
+            case .One:  return GL_ONE;
+            case .Src_Color: return GL_SRC_COLOR;
+            case .Dst_Color: return GL_DST_COLOR;
+            case .Src_Alpha: return GL_SRC_ALPHA;
+            case .One_Minus_Src_Color: return GL_ONE_MINUS_SRC_COLOR;
+            case .One_Minus_Dst_Color: return GL_ONE_MINUS_DST_COLOR;
+            case .One_Minus_Src_Alpha: return GL_ONE_MINUS_SRC_ALPHA;
+            }
+            return 0;
+        }
+
+        // TODO(colby): Do the blend ops
+        glBlendFunc(GL_SRC_COLOR, blend_factor_to_gl(details.src_color_blend_factor));
+        glBlendFunc(GL_DST_COLOR, blend_factor_to_gl(details.dst_color_blend_factor));
+
+        glBlendFunc(GL_SRC_ALPHA, blend_factor_to_gl(details.src_alpha_blend_factor));
+        glBlendFunc(GL_DST_ALPHA, blend_factor_to_gl(details.dst_alpha_blend_factor));
+    } else {
+        glDisable(GL_BLEND);
+    }
+
+    // Setup the depth testing and blend functions
+    if details.depth_test {
+        glEnable(GL_DEPTH_TEST);
+
+        func : GLenum;
+        switch details.depth_compare {
+        case .Never: func = GL_NEVER;
+        case .Less:  func = GL_LESS;
+        case .Equal: func = GL_EQUAL;
+        case .Greater: func = GL_GREATER;
+        case .Not_Equal: func = GL_NOTEQUAL;
+        case .Always: func = GL_ALWAYS;
+
+        case .Less_Or_Equal: func = GL_LEQUAL;
+        case .Greater_Or_Equal: func = GL_GEQUAL;
+        }
+
+        glDepthFunc(func);
+    } else do glDisable(GL_DEPTH_TEST);
+
+    // Set the depth mask
+    depth_mask : GLboolean = GL_FALSE;
+    if details.depth_write do depth_mask = GL_TRUE;
+    glDepthMask(depth_mask);
+
+    set_shader(details.shader);
 }
 
 end_pipeline :: proc(loc := #caller_location) {
