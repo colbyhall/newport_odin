@@ -150,3 +150,11 @@ dispatcher :: proc() -> ^core.Event_Dispatcher {
 is_running :: proc() -> bool {
     return !the_engine.wants_to_quit;
 }
+
+dispatch_input :: proc() {
+    core.poll_events(&the_engine.window);
+}
+
+display :: proc() {
+    swap_window_buffer(&the_engine.window);
+}

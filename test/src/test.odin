@@ -19,11 +19,11 @@ main :: proc() {
     show_window(&the_engine.window, true);
 
     for engine.is_running() {
-        poll_events(&the_engine.window);
+        engine.dispatch_input();
 
         glClearColor(0.1, 0.1, 0.1, 1);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        swap_window_buffer(&the_engine.window);
+        engine.display();
     }
 }
