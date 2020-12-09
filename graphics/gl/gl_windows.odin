@@ -123,6 +123,7 @@ make_current :: proc(window: core.Window, maj_version := 3, min_version := 3) ->
     glrc := win32.create_context_attribs_arb(window_context, nil, &context_attribs[0]);
     if win32.make_current(window_context, glrc) {
         ctx.is_valid = true;
+        ctx.thread_id = context.thread_id;
 
         glGetIntegerv(GL_MAJOR_VERSION, &ctx.maj_version);
         glGetIntegerv(GL_MINOR_VERSION, &ctx.min_version);

@@ -2,12 +2,11 @@ package test
 
 import "newport:core"
 import "newport:engine"
-import "newport:graphics/gl"
+import "newport:graphics"
+import "newport:asset"
 
 main :: proc() {
     using core;
-    using gl;
-    using extensions;
 
     init_details := engine.default_init_details("test");
     engine.init_scoped(init_details);   
@@ -16,13 +15,15 @@ main :: proc() {
 
     the_engine := engine.get();
 
+    graphics.init();
+    asset.discover();
+
     show_window(&the_engine.window, true);
 
     for engine.is_running() {
         engine.dispatch_input();
 
-        glClearColor(0.1, 0.1, 0.1, 1);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        graphics.clear(Linear_Color{ 0.1, 0.1, 0.1, 1 });
 
         engine.display();
     }

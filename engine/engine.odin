@@ -156,5 +156,5 @@ dispatch_input :: proc() {
 }
 
 display :: proc() {
-    swap_window_buffer(&the_engine.window);
+    core.swap_window_buffer(&the_engine.window);
 }
