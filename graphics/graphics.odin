@@ -33,6 +33,7 @@ Uniforms :: union {
     Vector4,
     Matrix4,
     Linear_Color,
+    ^Texture2d,
 }
 
 // All supported texture formats
@@ -42,14 +43,34 @@ Texture_Format :: enum {
     RGBAF16,
 }
 
+// All supported texture wraps
+// 
+// @TODO(colby): Add more of these
 Texture_Wrap :: enum {
     Clamp,
     Repeat,
 }
 
+// All supported texture filtering
 Texture_Filtering :: enum {
     Nearest, // Also known as point sampling
     Linear,
+}
+
+Framebuffer_Flags :: enum {
+    Position,
+    Normal,
+    Albedo,
+    Depth,
+    HDR,
+}
+
+Framebuffer_Colors_Index :: enum {
+    Position,
+    Normal,
+    Albedo,
+    Count,
+    HDR = 0,
 }
 
 Draw_Mode :: enum {
@@ -102,6 +123,11 @@ Color_Mask :: enum {
     Alpha,
 }
 
+Uniform_Map :: map[string]Uniforms;
+
+// Pipelines describe how the graphics API will draw something.
+//
+// Each underlying API has a different way of doing pipelines. So we want to abstract it out
 Pipeline_Details :: struct {
     shader : ^Shader,
 
@@ -164,6 +190,7 @@ Pipeline_Manager :: struct {
     active  : Pipeline_Id,  
 }
 
+@private
 _add_pipeline :: proc(pipeline: Pipeline, loc := #caller_location) -> Pipeline_Id {
     check(loc);
     using state;
@@ -174,6 +201,7 @@ _add_pipeline :: proc(pipeline: Pipeline, loc := #caller_location) -> Pipeline_I
     return pipeline_manager.last_id;
 }
 
+@private
 _remove_pipeline :: proc(id: Pipeline_Id, loc := #caller_location) -> (Pipeline, bool) {
     check(loc);
     using state;
@@ -189,11 +217,14 @@ _remove_pipeline :: proc(id: Pipeline_Id, loc := #caller_location) -> (Pipeline,
 }
 
 @(deferred_out=end_pipeline)
-pipeline_scoped :: proc(id: Pipeline_Id, loc := #caller_location) -> runtime.Source_Code_Location {
-    begin_pipeline(id, loc);
+pipeline_scoped :: proc(id: Pipeline_Id, uniforms: Uniform_Map, loc := #caller_location) -> runtime.Source_Code_Location {
+    begin_pipeline(id, uniforms, loc);
     return loc;
 }
 
+// Global graphics state which contains managers and other info about graphics
+//
+// @see Pipeline_Manager
 Graphics :: struct {
     pipeline_manager : Pipeline_Manager,
 }

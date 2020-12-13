@@ -5,6 +5,10 @@ import "newport:engine"
 import "newport:graphics"
 import "newport:asset"
 
+import "core:encoding/json"
+import "core:os"
+import "core:fmt"
+
 main :: proc() {
     using core;
 
@@ -20,10 +24,15 @@ main :: proc() {
 
     show_window(&the_engine.window, true);
 
+    shader := asset.find(&graphics.shader_catalog, "basic2d");
+    fmt.print(shader);
+
     for engine.is_running() {
         engine.dispatch_input();
 
         graphics.clear(Linear_Color{ 0.1, 0.1, 0.1, 1 });
+
+
 
         engine.display();
     }

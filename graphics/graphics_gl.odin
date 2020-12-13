@@ -213,7 +213,7 @@ set_uniform_mat4 :: proc(name: string, m: core.Matrix4, loc := #caller_location)
     return true;
 }
 
-set_uniform_tex :: proc(name: string, t: ^Texture, loc := #caller_location) -> bool {
+set_uniform_texture2d :: proc(name: string, t: ^Texture2d, loc := #caller_location) -> bool {
     using gl;
     using extensions;
 
@@ -221,7 +221,7 @@ set_uniform_tex :: proc(name: string, t: ^Texture, loc := #caller_location) -> b
     if bound == nil || uniform == nil do return false;
 
     glActiveTexture(u32(GL_TEXTURE0 + uniform.location));
-    set_texture(t);
+    set_texture2d(t);
     glUniform1i(uniform.location, uniform.location);
 
     return true;
@@ -238,7 +238,7 @@ set_uniform_vec2 :: proc(name: string, a: core.Vector2, loc := #caller_location)
     return true;
 }
 
-set_uniform :: proc { set_uniform_mat4, set_uniform_tex, set_uniform_vec2 };
+set_uniform :: proc { set_uniform_mat4, set_uniform_texture2d, set_uniform_vec2 };
 
 // Pipeline structure which is used to set pipeline state
 //
@@ -258,7 +258,7 @@ delete_pipeline :: proc(id: Pipeline_Id, loc := #caller_location) -> bool {
     return found;
 }
 
-begin_pipeline :: proc(id: Pipeline_Id, loc := #caller_location) {
+begin_pipeline :: proc(id: Pipeline_Id, uniforms: Uniform_Map, loc := #caller_location) {
     check(loc);
     gl.check(loc);
     using state; 
@@ -372,13 +372,20 @@ begin_pipeline :: proc(id: Pipeline_Id, loc := #caller_location) {
     glDepthMask(depth_mask);
 
     set_shader(details.shader);
+
+    for key, value in uniforms {
+        #partial switch u in value {
+        case Matrix4: set_uniform(key, u);
+        case ^Texture2d: set_uniform(key, u);
+        }
+    }
 }
 
 end_pipeline :: proc(loc := #caller_location) {
     // Do nothing because this is opengl son
 }
 
-Texture :: struct {
+Texture2d :: struct {
     using _ : asset.Asset,
 
     id      : gl.GLuint,
@@ -388,31 +395,25 @@ Texture :: struct {
     depth   : int, 
 }
 
-set_texture :: proc(texture: ^Texture, loc := #caller_location) {
+set_texture2d :: proc(texture: ^Texture2d, loc := #caller_location) {
     gl.check(loc);
+    check(loc);
 
     using gl;
     using extensions;
 
-    check(loc);
-
-    if texture == nil {
-        glBindTexture(GL_TEXTURE_2D, 0);
-        // ctx.bound_texture = nil;
-    } else {
-        glBindTexture(GL_TEXTURE_2D, texture.id);
-        // ctx.bound_texture = texture;
-    }
+    if texture == nil do glBindTexture(GL_TEXTURE_2D, 0);
+    else do glBindTexture(GL_TEXTURE_2D, texture.id);
 }
 
 // TODO(colby): Handle all the different formatting info and such
-upload_texture :: proc(texture: ^Texture) -> bool {
+upload_texture :: proc(texture: ^Texture2d) -> bool {
     using gl;
     using extensions;
 
     if texture.id == 0 do glGenTextures(1, auto_cast &texture.id);
 
-    set_texture(texture);
+    set_texture2d(texture);
     using texture;
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -436,3 +437,125 @@ upload_texture :: proc(texture: ^Texture) -> bool {
     glTexImage2D(GL_TEXTURE_2D, 0, auto_cast a, auto_cast width, auto_cast height, 0, auto_cast format, GL_UNSIGNED_BYTE, &pixels[0]);
     return true;
 }
+
+/*
+Framebuffer :: struct {
+    id       : gl.GLuint,
+    
+    colors   : [Framebuffer_Colors_Index.Count]Texture2d,
+    depth    : Texture2d,
+
+    width    : int,
+    height   : int,
+    flags    : bit_set[Framebuffer_Flags],
+}
+
+make_framebuffer :: proc(width, height: int, flags: bit_set[Framebuffer_Flags], loc := #caller_location) -> (fb: Framebuffer, ok: bool) {
+    gl.check(loc);
+    check(loc);
+
+    using gl;
+    using extensions;
+
+    id : GLuint;
+    glGenFramebuffers(1, &id);
+    glBindFramebuffer(GL_FRAMEBUFFER, id);
+
+    fb.id     = id;
+    fb.width  = width;
+    fb.height = height;
+    fb.flags  = flags;
+
+    if .Albedo in flags && .HDR in flags {
+        log.errorf("[Graphics] Created a framebuffer with HDR and Albedo buffer. This is impossible. In {} at {}", loc.file_path, loc.line);
+        assert(false);
+    }
+
+    if .Position in flags {
+        position_texture : GLuint;
+        glGenTextures(1, &position_texture);
+        glBindTexture(GL_TEXTURE_2D, position_texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_FLOAT, 0);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + FCI_Position, GL_TEXTURE_2D, position_texture, 0);
+        fb.color[Framebuffer_Colors_Index.Position] = Texture2d {  
+            width  = width, 
+            height = height, 
+            depth  = 4, 
+            id     = position_texture,
+        };
+    }
+
+    if ((flags & FF_Normal) != 0) {
+        GLuint normal_texture;
+        glGenTextures(1, &normal_texture);
+        glBindTexture(GL_TEXTURE_2D, normal_texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_FLOAT, 0);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + FCI_Normal, GL_TEXTURE_2D, normal_texture, 0);
+        result.color[FCI_Normal] = (Texture2d) {  
+            .width  = width, 
+            .height = height, 
+            .depth  = 4, 
+            .id     = normal_texture,
+        };
+    }
+
+
+    if ((flags & FF_Depth) != 0) {
+        GLuint depth_texture;
+        glGenTextures(1, &depth_texture);
+        glBindTexture(GL_TEXTURE_2D, depth_texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT16, width, height, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT, 0);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_R_TO_TEXTURE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depth_texture, 0);
+        result.depth = (Texture2d) {  
+            .width  = width, 
+            .height = height, 
+            .depth  = 1, 
+            .id     = depth_texture,
+        };
+    }
+
+    if ((flags & FF_Albedo) != 0) {
+        GLuint albedo_texture;
+        glGenTextures(1, &albedo_texture);
+        glBindTexture(GL_TEXTURE_2D, albedo_texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + FCI_Albedo, GL_TEXTURE_2D, albedo_texture, 0);
+        result.color[FCI_Albedo] = (Texture2d) {  
+            .width = width, 
+            .height = height, 
+            .depth = 4, 
+            .id = albedo_texture,
+        };
+    }
+
+    if ((flags & FF_HDR) != 0) {
+        GLuint hdr_texture;
+        glGenTextures(1, &hdr_texture);
+        glBindTexture(GL_TEXTURE_2D, hdr_texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_FLOAT, 0);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + FCI_HDR, GL_TEXTURE_2D, hdr_texture, 0);
+        result.color[FCI_HDR] = (Texture2d) {
+            .width  = width,
+            .height = height,
+            .depth  = 4,
+            .id     = hdr_texture,
+        };
+    }
+
+    return;
+}
+*/

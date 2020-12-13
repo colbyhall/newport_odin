@@ -8,7 +8,7 @@ import "core:strings"
 import "core:mem"
 import "core:log"
 
-Texture_Catalog :: asset.Catalog(Texture);
+Texture_Catalog :: asset.Catalog(Texture2d);
 texture_catalog : Texture_Catalog;
 
 init_texture_catalog :: proc() {
@@ -20,7 +20,7 @@ init_texture_catalog :: proc() {
 }
 
 register_texture :: proc(cat: ^asset.Catalog_Base, name: string, path: string) {
-    texture     := new(Texture);
+    texture     := new(Texture2d);
     texture.name = name;
     texture.path = path;
     texture.derived = texture^;
