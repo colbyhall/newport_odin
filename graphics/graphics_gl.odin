@@ -11,6 +11,7 @@ import "../core"
 
 import "core:log"
 import "core:mem"
+import "core:runtime"
 
 clear :: proc(c: core.Linear_Color, loc := #caller_location) {
     gl.check(loc);
@@ -379,6 +380,24 @@ begin_pipeline :: proc(id: Pipeline_Id, uniforms: Uniform_Map, loc := #caller_lo
         case ^Texture2d: set_uniform(key, u);
         }
     }
+
+    // Setup the vertex attrib info
+    // TODO(colby): Do all vertex attrb in graphics.odin
+    // TODO(colby): Check if info is allowed
+    vertex_info := runtime.type_info_base(type_info_of(details.vertex)).variant.(runtime.Type_Info_Struct);
+    for type, i in vertex_info.types {
+        offset := vertex_info.offsets[i];
+
+        switch type.id {
+        case Vector2: glVertexAttribPointer(auto_cast i, 2, GL_FLOAT, GL_FALSE, auto_cast size_of(details.vertex), u64(offset));
+        case Vector3: glVertexAttribPointer(auto_cast i, 3, GL_FLOAT, GL_FALSE, auto_cast size_of(details.vertex), u64(offset));
+        case Vector4: glVertexAttribPointer(auto_cast i, 2, GL_FLOAT, GL_FALSE, auto_cast size_of(details.vertex), u64(offset));
+        case Linear_Color: glVertexAttribPointer(auto_cast i, 4, GL_FLOAT, GL_FALSE, auto_cast size_of(details.vertex), u64(offset));
+        }
+
+        glEnableVertexAttribArray(auto_cast i);
+    }
+
 }
 
 end_pipeline :: proc(loc := #caller_location) {
@@ -559,3 +578,66 @@ make_framebuffer :: proc(width, height: int, flags: bit_set[Framebuffer_Flags], 
     return;
 }
 */
+
+Vertex_Buffer :: struct(Vertex: typeid) {
+    vao, vbo, vio : gl.GLuint,
+
+    vertices : []Vertex,
+    indices  : []u32,
+}
+
+make_vertex_buffer :: proc($Vertex: typeid, has_indices := false, loc := #caller_location) -> Vertex_Buffer(Vertex) {
+    gl.check(loc);
+    check(loc);
+
+    using gl;
+    using extensions;
+
+    vao, vbo, vio: GLuint;
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+
+    glGenBuffers(1, &vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+
+    glGenBuffers(1, &vio);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vio);
+
+    return Vertex_Buffer(Vertex){ vao = vao, vbo = vbo, vio = vio };
+}
+
+upload_vertex_buffer :: proc(using vb: ^Vertex_Buffer($Vertex), vertices: []Vertex, indices := [0]u32{}) {
+    gl.check(loc);
+    check(loc);
+
+    using gl;
+    using extensions;
+
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, auto_cast (size_of(Vertex) * len(vertices)), &vertices[0], GL_STREAM_DRAW);
+
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vio);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, auto_cast (size_of(u32) * len(indices)), &indices[0], GL_STREAM_DRAW);
+
+    vb.vertices = vertices;
+    vb.indices  = indices;
+}
+
+draw_vertex_buffer :: proc(using vb: ^Vertex_Buffer($Vertex)) {
+    if len(vertices) == 0 do return;
+
+    gl.check(loc);
+    check(loc);
+
+    using gl;
+    using extensions;
+
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vio);
+
+    if len(indices) > 0 do glDrawElements(GL_TRIANGLES, auto_cast len(indices), GL_UNSIGNED_INT, 0);
+    else do glDrawArrays(GL_TRIANGLES, 0, auto_cast len(vertices));
+}

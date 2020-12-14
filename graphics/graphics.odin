@@ -130,6 +130,7 @@ Uniform_Map :: map[string]Uniforms;
 // Each underlying API has a different way of doing pipelines. So we want to abstract it out
 Pipeline_Details :: struct {
     shader : ^Shader,
+    vertex : typeid,
 
     viewport : Rect,
     scissor  : Rect,
