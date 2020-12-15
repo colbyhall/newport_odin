@@ -376,28 +376,38 @@ begin_pipeline :: proc(id: Pipeline_Id, uniforms: Uniform_Map, loc := #caller_lo
 
     for key, value in uniforms {
         #partial switch u in value {
-        case Matrix4: set_uniform(key, u);
-        case ^Texture2d: set_uniform(key, u);
+        case Matrix4:   set_uniform(key, u, loc);
+        case ^Texture2d: set_uniform(key, u, loc);
         }
     }
 
     // Setup the vertex attrib info
     // TODO(colby): Do all vertex attrb in graphics.odin
     // TODO(colby): Check if info is allowed
-    vertex_info := runtime.type_info_base(type_info_of(details.vertex)).variant.(runtime.Type_Info_Struct);
-    for type, i in vertex_info.types {
-        offset := vertex_info.offsets[i];
+
+
+    vertex_base_info := runtime.type_info_base(type_info_of(details.vertex));
+    vertex_struct_info := vertex_base_info.variant.(runtime.Type_Info_Struct);
+    vertex_size := GLsizei(vertex_base_info.size);
+
+    for type, i in vertex_struct_info.types {
+        offset := u64(vertex_struct_info.offsets[i]);
+
+        found := false;
+        for it in details.shader.attributes {
+            if it.name == vertex_struct_info.names[i] do found = true;
+        }
+        if !found do continue;
 
         switch type.id {
-        case Vector2: glVertexAttribPointer(auto_cast i, 2, GL_FLOAT, GL_FALSE, auto_cast size_of(details.vertex), u64(offset));
-        case Vector3: glVertexAttribPointer(auto_cast i, 3, GL_FLOAT, GL_FALSE, auto_cast size_of(details.vertex), u64(offset));
-        case Vector4: glVertexAttribPointer(auto_cast i, 2, GL_FLOAT, GL_FALSE, auto_cast size_of(details.vertex), u64(offset));
-        case Linear_Color: glVertexAttribPointer(auto_cast i, 4, GL_FLOAT, GL_FALSE, auto_cast size_of(details.vertex), u64(offset));
+        case Vector2:      glVertexAttribPointer(auto_cast i, 2, GL_FLOAT, GL_FALSE, vertex_size, offset);
+        case Vector3:      glVertexAttribPointer(auto_cast i, 3, GL_FLOAT, GL_FALSE, vertex_size, offset);
+        case Vector4:      glVertexAttribPointer(auto_cast i, 4, GL_FLOAT, GL_FALSE, vertex_size, offset);
+        case Linear_Color: glVertexAttribPointer(auto_cast i, 4, GL_FLOAT, GL_FALSE, vertex_size, offset);
         }
 
         glEnableVertexAttribArray(auto_cast i);
     }
-
 }
 
 end_pipeline :: proc(loc := #caller_location) {
@@ -586,7 +596,7 @@ Vertex_Buffer :: struct(Vertex: typeid) {
     indices  : []u32,
 }
 
-make_vertex_buffer :: proc($Vertex: typeid, has_indices := false, loc := #caller_location) -> Vertex_Buffer(Vertex) {
+make_vertex_buffer :: proc($Vertex: typeid, has_indices := true, loc := #caller_location) -> Vertex_Buffer(Vertex) {
     gl.check(loc);
     check(loc);
 
@@ -595,37 +605,38 @@ make_vertex_buffer :: proc($Vertex: typeid, has_indices := false, loc := #caller
 
     vao, vbo, vio: GLuint;
     glGenVertexArrays(1, &vao);
-    glBindVertexArray(vao);
+    // glBindVertexArray(vao);
 
     glGenBuffers(1, &vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    // glBindBuffer(GL_ARRAY_BUFFER, vbo);
 
     glGenBuffers(1, &vio);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vio);
+    // glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vio);
 
     return Vertex_Buffer(Vertex){ vao = vao, vbo = vbo, vio = vio };
 }
 
-upload_vertex_buffer :: proc(using vb: ^Vertex_Buffer($Vertex), vertices: []Vertex, indices := [0]u32{}) {
+upload_vertex_buffer :: proc(vb: ^Vertex_Buffer($Vertex), vertices: []Vertex, indices: []u32, loc := #caller_location) {
     gl.check(loc);
     check(loc);
 
     using gl;
     using extensions;
 
-    glBindVertexArray(vao);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBindVertexArray(vb.vao);
+
+    glBindBuffer(GL_ARRAY_BUFFER, vb.vbo);
     glBufferData(GL_ARRAY_BUFFER, auto_cast (size_of(Vertex) * len(vertices)), &vertices[0], GL_STREAM_DRAW);
 
+    vb.vertices = vertices;
 
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vio);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vb.vio);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, auto_cast (size_of(u32) * len(indices)), &indices[0], GL_STREAM_DRAW);
 
-    vb.vertices = vertices;
-    vb.indices  = indices;
+    vb.indices = indices;
 }
 
-draw_vertex_buffer :: proc(using vb: ^Vertex_Buffer($Vertex)) {
+draw_vertex_buffer :: proc(using vb: ^Vertex_Buffer($Vertex), loc := #caller_location) {
     if len(vertices) == 0 do return;
 
     gl.check(loc);
@@ -638,6 +649,6 @@ draw_vertex_buffer :: proc(using vb: ^Vertex_Buffer($Vertex)) {
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vio);
 
-    if len(indices) > 0 do glDrawElements(GL_TRIANGLES, auto_cast len(indices), GL_UNSIGNED_INT, 0);
+    if len(indices) > 0 do glDrawElements(GL_TRIANGLES, auto_cast len(indices), GL_UNSIGNED_INT, nil);
     else do glDrawArrays(GL_TRIANGLES, 0, auto_cast len(vertices));
 }

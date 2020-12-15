@@ -158,3 +158,10 @@ dispatch_input :: proc() {
 display :: proc() {
     core.swap_window_buffer(&the_engine.window);
 }
+
+viewport :: proc() -> core.Rect {
+    using core;
+
+    window := the_engine.window;
+    return Rect{ v2(0), v2(window.width, window.height) };
+}

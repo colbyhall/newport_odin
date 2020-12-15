@@ -3,6 +3,7 @@ package test
 import "newport:core"
 import "newport:engine"
 import "newport:graphics"
+import "newport:graphics/draw"
 import "newport:asset"
 
 import "core:encoding/json"
@@ -24,15 +25,35 @@ main :: proc() {
 
     show_window(&the_engine.window, true);
 
-    shader := asset.find(&graphics.shader_catalog, "basic2d");
-    fmt.print(shader);
+    pipeline_details := graphics.default_pipeline_details();
+    pipeline_details.shader = asset.find(&graphics.shader_catalog, "basic2d");
+    pipeline_details.vertex = typeid_of(draw.Immediate_Vertex);
+    pipeline_details.viewport = engine.viewport();
+
+    pipeline_id := graphics.make_pipeline(pipeline_details);
+
+    imm := draw.make_immediate_renderer();
 
     for engine.is_running() {
         engine.dispatch_input();
 
+        viewport := engine.viewport();
+
         graphics.clear(Linear_Color{ 0.1, 0.1, 0.1, 1 });
 
+        proj, view := draw.render_right_handed(viewport);
 
+        uniforms := graphics.Uniform_Map{
+            "projection" = proj,
+            "view" = view,
+        };
+
+        graphics.set_pipeline(pipeline_id, uniforms);
+        draw.begin(&imm);
+
+        draw.rect(&imm, viewport, -5, core.white);
+
+        draw.flush(&imm);
 
         engine.display();
     }

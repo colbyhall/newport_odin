@@ -24,6 +24,7 @@ GL_TRUE  :: 1;
 GL_FALSE :: 0;
 
 GL_UNSIGNED_BYTE :: 0x1401;
+GL_UNSIGNED_INT  :: 0x1405;
 GL_FLOAT         :: 0x1406;
 GL_FLOAT_MAT4    :: 0x8B5C;
 GL_TRIANGLES     :: 0x0004;
@@ -104,6 +105,8 @@ GL_NOTEQUAL :: 0x0205;
 GL_GEQUAL :: 0x0206;
 GL_ALWAYS :: 0x0207;
 
+GL_ELEMENT_ARRAY_BUFFER :: 0x8893;
+
 @(default_calling_convention = "c")
 foreign opengl32 {
     glClear         :: proc(mask: GLbitfield) ---;
@@ -123,6 +126,7 @@ foreign opengl32 {
     glFrontFace     :: proc(mode: GLenum) ---;
     glBlendFunc     :: proc(sfactor: GLenum, dfactor: GLenum) ---;
     glDrawArrays    :: proc(mode: GLenum, first: GLint, count: GLsizei) ---;
+    glDrawElements  :: proc(mode: GLenum, count: GLsizei, type: GLenum, indices: rawptr) ---;
     glGenTextures   :: proc(n: GLsizei, textures: ^GLint) ---;
     glBindTexture   :: proc(target: GLenum, texture: GLuint) ---;
     glTexParameteri :: proc(target: GLenum, pname: GLenum, param: GLint) ---;

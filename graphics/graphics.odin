@@ -217,6 +217,11 @@ _remove_pipeline :: proc(id: Pipeline_Id, loc := #caller_location) -> (Pipeline,
     return elem, true;
 }
 
+set_pipeline :: proc(id: Pipeline_Id, uniforms: Uniform_Map, loc := #caller_location) {
+    state.pipeline_manager.active = id;
+    begin_pipeline(id, uniforms, loc);
+}
+
 @(deferred_out=end_pipeline)
 pipeline_scoped :: proc(id: Pipeline_Id, uniforms: Uniform_Map, loc := #caller_location) -> runtime.Source_Code_Location {
     begin_pipeline(id, uniforms, loc);
@@ -237,6 +242,13 @@ check :: proc(loc := #caller_location) {
         log.errorf("[Graphics] Can't do graphics work if graphics is not initiallized. Call graphics.init before {} {}", loc.file_path, loc.line);
         assert(false);
     }
+}
+
+is_pipeline_active :: proc(id : Pipeline_Id = 0, loc := #caller_location) -> bool {
+    check(loc);
+
+    if id == 0 do return state.pipeline_manager.active != 0;
+    return state.pipeline_manager.active == id;
 }
 
 // @returns the graphics ptr casted to type T
