@@ -5,6 +5,7 @@ import "newport:engine"
 import "newport:graphics"
 import "newport:graphics/draw"
 import "newport:asset"
+import "newport:job"
 
 import "core:encoding/json"
 import "core:os"
@@ -22,6 +23,8 @@ main :: proc() {
 
     graphics.init(graphics.default_init_details());
     asset.discover();
+
+    job.init_scoped();
 
     show_window(&the_engine.window, true);
 

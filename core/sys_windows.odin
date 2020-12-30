@@ -7,8 +7,11 @@ import "core:strings"
 import "core:runtime"
 import "core:dynlib"
 import "core:time"
+import "core:os"
+import "core:thread"
 
 foreign import "system:user32.lib"
+foreign import "system:kernel32.lib"
 
 Window_Handle :: win32.Hwnd;
 
@@ -281,4 +284,98 @@ foreign user32 {
     SetCapture :: proc(hWnd: win32.Hwnd) -> win32.Hwnd ---;
     ReleaseCapture :: proc() -> win32.Bool ---;
     GetCaretBlinkTime :: proc() -> u32 ---;
+}
+
+LOGICAL_PROCESSOR_RELATIONSHIP :: enum {
+    RelationProcessorCore,
+    RelationNumaNode,
+    RelationCache,
+    RelationProcessorPackage,
+    RelationGroup,
+    RelationAll,
+}
+
+PROCESSOR_CACHE_TYPE :: enum {
+    CacheUnified,
+    CacheInstruction,
+    CacheData,
+    CacheTrace,
+}
+
+CACHE_DESCRIPTOR :: struct {
+    Level         : u8,
+    Associativity : u8,
+    LineSize      : u16,
+    Size          : u32,
+    Type          : PROCESSOR_CACHE_TYPE,
+}
+
+SYSTEM_LOGICAL_PROCESSOR_INFORMATION :: struct {
+    ProcessorMask : uint,
+    Relationship  : LOGICAL_PROCESSOR_RELATIONSHIP,
+    using _ : struct #raw_union {
+        ProcessorsCore : struct {
+            Flags : u8,
+        },
+        NumaNode : struct {
+            NodeNumber : u32,
+        },
+        Cache      : CACHE_DESCRIPTOR,
+        using _    : [2]u64,
+    },
+}
+
+@(default_calling_convention = "std")
+foreign kernel32 {
+    GetLogicalProcessorInformation :: proc(rawptr, ^u32) -> win32.Bool ---;
+    SetThreadAffinityMask          :: proc(win32.Handle, uint) -> uint ---;
+    GetCurrentThread               :: proc() -> win32.Handle ---;
+}
+
+@private
+get_core_info :: proc(allocator := context.allocator) -> []SYSTEM_LOGICAL_PROCESSOR_INFORMATION {
+    count : u32;
+    GetLogicalProcessorInformation(nil, &count);
+
+    result := make([]SYSTEM_LOGICAL_PROCESSOR_INFORMATION, int(count) / size_of(SYSTEM_LOGICAL_PROCESSOR_INFORMATION), allocator);
+    GetLogicalProcessorInformation(&result[0], &count);
+
+    return result;
+}
+
+logical_core_count :: proc() -> int {
+    @static core_count := 0;
+    if core_count == 0 {
+        info := get_core_info(context.temp_allocator);
+
+        for it in &info {
+            if it.Relationship == .RelationProcessorCore  {
+                mask := cast(^bit_set['A'..'Z'; uint])&it.ProcessorMask;
+                core_count += card(mask^);
+            }
+        }
+    }
+    return core_count;
+}
+
+set_affinity :: proc(thread: ^thread.Thread, index: int) {
+    count := logical_core_count();
+    assert(index < count);
+
+    index := index + 1; 
+
+    mask := uint(1) << uint(index);
+    SetThreadAffinityMask(auto_cast thread.win32_thread, mask);
+}
+
+current_thread :: proc(allocator := context.allocator) -> ^thread.Thread {
+    thread := new(thread.Thread, allocator);
+
+    thread.win32_thread    = auto_cast GetCurrentThread();
+    thread.win32_thread_id = auto_cast os.current_thread_id();
+    return thread;
+}
+
+thread_id :: proc(thread: ^thread.Thread) -> int {
+    return int(thread.win32_thread_id);
 }

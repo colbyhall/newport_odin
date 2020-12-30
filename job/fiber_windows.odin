@@ -13,7 +13,7 @@ foreign kernel32 {
     SwitchToFiber        :: proc(lpFiber: rawptr) ---;
 }
 
-make_fiber :: proc(procedure: Thread_Proc, allocator := context.allocator) -> ^Fiber {
+make_fiber :: proc(procedure: Fiber_Proc, allocator := context.allocator) -> ^Fiber {
     __windows_fiber_entry_proc :: proc "stdcall" (f: ^Fiber) -> u32 {
         context = f.init_context;
         f.procedure(f);
@@ -32,7 +32,7 @@ make_fiber :: proc(procedure: Thread_Proc, allocator := context.allocator) -> ^F
 fiber_from_current :: proc(allocator := context.allocator) -> ^Fiber {
     f := new(Fiber, allocator);
 
-    f.handle = ConvertThreadToFiber(nil);
+    f.handle = ConvertThreadToFiber(0);
     f.init_context = context;
     f.allocator = allocator;
     f.is_threads = true;
