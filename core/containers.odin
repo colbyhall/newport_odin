@@ -1,5 +1,8 @@
 package core
 
+import "core:sync"
+import "core:mem"
+
 Float_Heap_Bucket :: struct(Value: typeid) {
     key   : f32,
     value : Value,
@@ -209,5 +212,85 @@ sga_iterator :: proc(using it: ^Sparse_Generation_Array_Iterator($E)) -> (val: ^
     }
 
     cond = false;
+    return;
+}
+
+// Source: Dmitry Vyukov's MPMC
+// http://www.1024cores.net/home/lock-free-algorithms/queues/bounded-mpmc-queue
+
+// TODO: Use the core's implementation. I just didn't want to mess with the whole -llvm-api thing
+Cache_Line_Pad :: struct {_: [64]byte};
+
+MPMC_Cell :: struct(T: typeid) {
+    sequence : int,
+    data     : T,
+}
+
+MPMC_Queue :: struct(T: typeid) {
+    using pad0  : Cache_Line_Pad,
+    buffer      : ^MPMC_Cell(T),
+    buffer_mask : int,
+    using pad1  : Cache_Line_Pad,
+    enqueue_pos : int,
+    using pad2  : Cache_Line_Pad,
+    dequeue_pos : int,
+    using pad3  : Cache_Line_Pad,
+}
+
+make_mpmc_queue :: proc($T: typeid, size: int) -> MPMC_Queue(T) {
+    assert(size >= 2 && (size & (size - 1)) == 0);
+
+    buffer := cast(^MPMC_Cell(T))mem.alloc(size_of(MPMC_Cell(T)) * size);
+    for i in 0..<size {
+        it := mem.ptr_offset(buffer, i);
+        sync.atomic_store(&it.sequence, i, .Relaxed); // TODO(colby): Determine if i have to use atomics during construction?
+    }
+
+    result : MPMC_Queue(T);
+    result.buffer = buffer;
+    result.buffer_mask = size - 1;
+    return result;
+}
+
+delete_mpmc_queue :: proc(using q: ^MPMC_Queue($E)) {
+    free(buffer);
+}
+
+enqueue_mpmc :: proc(q: ^MPMC_Queue($E), e: E) -> bool {
+    cell : ^MPMC_Cell(E);
+    pos  := sync.atomic_load(&q.enqueue_pos, .Relaxed);
+    for {
+        cell = mem.ptr_offset(q.buffer, pos & q.buffer_mask);
+        seq := sync.atomic_load(&cell.sequence, .Acquire);
+        dif := seq - pos;
+
+        if dif == 0 {
+            if _, ok := sync.atomic_compare_exchange_weak(&q.enqueue_pos, pos, pos + 1, .Relaxed, .Relaxed); ok do break;
+        } else if dif < 0 do return false;
+        else do pos = sync.atomic_load(&q.enqueue_pos, .Relaxed);
+    }
+    cell.data = e;
+    sync.atomic_store(&cell.sequence, pos + 1, .Release);
+    return true;
+}
+
+dequeue_mpmc :: proc(q: ^MPMC_Queue($E)) -> (data: E, ok: bool) {
+    cell : ^MPMC_Cell(E);
+    pos  := sync.atomic_load(&q.dequeue_pos, .Relaxed);
+    for {
+        cell = mem.ptr_offset(q.buffer, pos & q.buffer_mask);
+        seq := sync.atomic_load(&cell.sequence, .Acquire);
+        dif := seq - (pos + 1);
+
+        if dif == 0 {
+            if _, ok := sync.atomic_compare_exchange_weak(&q.dequeue_pos, pos, pos + 1, .Relaxed, .Relaxed); ok do break;
+        } else if dif < 0 do return;
+        else do pos = sync.atomic_load(&q.dequeue_pos, .Relaxed);
+    }
+    data = cell.data;
+    sync.atomic_store(&cell.sequence, pos + q.buffer_mask + 1, .Release);
+
+    ok = true;
+
     return;
 }

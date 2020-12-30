@@ -37,6 +37,12 @@ main :: proc() {
 
     imm := draw.make_immediate_renderer();
 
+    j := job.create(proc(data: rawptr) {
+        fmt.println("Hello World");
+    });
+
+    job.schedule(j);
+
     for engine.is_running() {
         engine.dispatch_input();
 
