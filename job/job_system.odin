@@ -17,24 +17,31 @@ Counter :: distinct u32; // Will be used strictly as an atomic
 wait :: proc(c: ^Counter, auto_cast target : Counter = 0) {
     index := thread_index();
 
+    if sync.atomic_load(c, .Relaxed) == target do return;
+
     for _, i in system.waiting {
         it := &system.waiting[i];
-        
+
         if sync.atomic_load(&it.active, .Relaxed) do continue;
 
         _, ok0 := sync.atomic_compare_exchange_weak(&it.in_use, false, true, .Sequentially_Consistent, .Relaxed);
         if !ok0 do continue;
 
-        sync.atomic_compare_exchange_weak(&it.active, false, true, .Sequentially_Consistent, .Relaxed);
+        sync.atomic_store(&it.active, true, .Relaxed);
 
         it.fiber  = system.fibers_on_thread[index];
         it.target = target;
         it.counter = c;
 
-        sync.atomic_compare_exchange_weak(&it.in_use, true, false, .Sequentially_Consistent, .Relaxed);
+        sync.atomic_store(&it.in_use, false, .Relaxed);
 
         if check_waiting() do return;
         free_fiber := find_fiber();
+
+        {
+            index, _ := slice.linear_search(system.fibers, free_fiber);
+            sync.atomic_store(&system.active_fibers[index], true, .Relaxed);
+        }
 
         system.fibers_on_thread[index] = free_fiber;
         switch_to_fiber(free_fiber);
@@ -148,6 +155,7 @@ init :: proc() {
         index := thread_index();
         fibers[index] = fiber_from_current();
         fibers_on_thread[index] = fibers[index];
+        sync.atomic_store(&active_fibers[index], true, .Relaxed);
 
         wait_for_work();
     }
@@ -201,6 +209,9 @@ schedule_single :: proc(job: Job, counter: ^Counter = nil, priority := Job_Prior
     case .Low:    queue = &system.low_priority;
     }
 
+    job := job;
+    job.counter = counter;
+
     sync.atomic_add(counter, 1, .Relaxed);
 
     ok := core.enqueue_mpmc(queue, job);
@@ -214,7 +225,9 @@ schedule_slice :: proc(jobs: []Job, counter: ^Counter = nil, priority := Job_Pri
 schedule :: proc{ schedule_single, schedule_slice };
 
 @private
-check_waiting :: proc() -> bool {
+check_waiting :: proc(is_trying_work := false) -> bool {
+    index, _ := slice.linear_search(system.fibers, system.fibers_on_thread[thread_index()]);
+
     for _, i in system.waiting {
         it := &system.waiting[i];
 
@@ -223,10 +236,15 @@ check_waiting :: proc() -> bool {
         _, ok0 := sync.atomic_compare_exchange_weak(&it.in_use, false, true, .Sequentially_Consistent, .Relaxed);
         if !ok0 do continue;
 
-        if sync.atomic_load(it.counter, .Relaxed) != it.target do continue;
+        if sync.atomic_load(it.counter, .Relaxed) != it.target {
+            sync.atomic_store(&it.in_use, false, .Relaxed);
+            continue;
+        }
         
-        sync.atomic_compare_exchange_weak(&it.active, true, false, .Sequentially_Consistent, .Relaxed);
-        sync.atomic_compare_exchange_weak(&it.in_use, true, false, .Sequentially_Consistent, .Relaxed);
+        sync.atomic_store(&it.active, false, .Relaxed);
+        sync.atomic_store(&it.in_use, false, .Relaxed);
+
+        if is_trying_work do sync.atomic_store(&system.active_fibers[index], false, .Relaxed);
 
         system.fibers_on_thread[thread_index()] = it.fiber;
         switch_to_fiber(it.fiber);
@@ -237,18 +255,14 @@ check_waiting :: proc() -> bool {
 }
 
 try_work :: proc() -> bool {
-    if check_waiting() do return true;
+    if check_waiting(true) do return true;
 
     if job, ok := find_work(); ok {
-        index, _ := slice.linear_search(system.fibers, system.fibers_on_thread[thread_index()]);
-        
-        sync.atomic_compare_exchange_weak(&system.active_fibers[index], false, true, .Sequentially_Consistent, .Relaxed);
         job.procedure(job.data);
-        sync.atomic_compare_exchange_weak(&system.active_fibers[index], true, false, .Sequentially_Consistent, .Relaxed);
 
         if job.counter != nil {
             sync.atomic_sub(job.counter, 1, .Relaxed);
-            check_waiting();
+            check_waiting(true);
         }
 
         return true;

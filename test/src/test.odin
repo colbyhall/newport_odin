@@ -41,11 +41,10 @@ main :: proc() {
 
     for _ in 0..<64 {
         j := job.create(proc(data: rawptr) {
-            x := 0;
-            for _ in 0..<1000000 {
-                x += x * x;
+            x := int(uintptr(data));
+            for _ in 0..<100000 {
+                x = x * x;
             }
-
             fmt.println(x);
         });
 
