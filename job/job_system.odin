@@ -14,7 +14,9 @@ import "../core"
 
 Counter :: distinct u32; // Will be used strictly as an atomic
 
-wait :: proc(c: ^Counter, auto_cast target : Counter = 0) {
+wait :: proc(counter: ^Counter, auto_cast target : Counter = 0, stay_on_thread := false) {
+    c := counter;
+
     index := thread_index();
 
     if sync.atomic_load(c, .Relaxed) == target do return;
@@ -32,6 +34,8 @@ wait :: proc(c: ^Counter, auto_cast target : Counter = 0) {
         it.fiber  = system.fibers_on_thread[index];
         it.target = target;
         it.counter = c;
+        if stay_on_thread do it.thread = index;
+        else do it.thread = -1;
 
         sync.atomic_store(&it.in_use, false, .Relaxed);
 
@@ -73,6 +77,8 @@ Waiting_Fiber :: struct {
     fiber   : ^Fiber,
     counter : ^Counter,
     target  : Counter,
+    thread  : int,
+
     active  : bool,
     in_use  : bool, // Used for thread safety
 }
@@ -226,9 +232,10 @@ schedule :: proc{ schedule_single, schedule_slice };
 
 @private
 check_waiting :: proc(is_trying_work := false) -> bool {
-    index, _ := slice.linear_search(system.fibers, system.fibers_on_thread[thread_index()]);
+    ti := thread_index();
+    index, _ := slice.linear_search(system.fibers, system.fibers_on_thread[ti]);
 
-    for _, i in system.waiting {
+    for _, i in &system.waiting {
         it := &system.waiting[i];
 
         if !sync.atomic_load(&it.active, .Relaxed) do continue;
@@ -237,6 +244,11 @@ check_waiting :: proc(is_trying_work := false) -> bool {
         if !ok0 do continue;
 
         if sync.atomic_load(it.counter, .Relaxed) != it.target {
+            sync.atomic_store(&it.in_use, false, .Relaxed);
+            continue;
+        }
+
+        if it.thread != -1 && it.thread != ti {
             sync.atomic_store(&it.in_use, false, .Relaxed);
             continue;
         }
@@ -272,7 +284,7 @@ try_work :: proc() -> bool {
 
 wait_for_work :: proc() {
     for !sync.atomic_load(&system.is_shutdown, .Relaxed) {
-        if !try_work() do time.sleep(1);
+        if !try_work() do time.sleep(100);
     }
 }
 

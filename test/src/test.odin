@@ -41,17 +41,17 @@ main :: proc() {
 
     for _ in 0..<64 {
         j := job.create(proc(data: rawptr) {
-            x := int(uintptr(data));
-            for _ in 0..<100000 {
-                x = x * x;
+            x := 1;
+            for i in 1..<100 {
+                x += i * i;
+                fmt.println(x);
             }
-            fmt.println(x);
         });
 
         job.schedule(j, &counter);
     }
 
-    job.wait(&counter);
+    job.wait(counter = &counter, stay_on_thread = true);
 
     for engine.is_running() {
         engine.dispatch_input();
@@ -70,7 +70,7 @@ main :: proc() {
         graphics.set_pipeline(pipeline_id, uniforms);
         draw.begin(&imm);
 
-        draw.rect(&imm, viewport, -5, core.white);
+        draw.rect(&imm, viewport, -5, core.green);
 
         draw.flush(&imm);
 

@@ -178,5 +178,5 @@ rgba :: proc(c: u32) -> Linear_Color {
 white :: Linear_Color{ 1, 1, 1, 1 };
 black :: Linear_Color{ 0, 0, 0, 1 };
 red   :: Linear_Color{ 1, 0, 0, 1 };
-blue  :: Linear_Color{ 0, 1, 0, 1 };
-green :: Linear_Color{ 0, 0, 1, 1 };
+green :: Linear_Color{ 0, 1, 0, 1 };
+blue  :: Linear_Color{ 0, 0, 1, 1 };
