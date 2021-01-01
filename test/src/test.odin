@@ -37,22 +37,6 @@ main :: proc() {
 
     imm := draw.make_immediate_renderer();
 
-    counter : job.Counter;
-
-    for _ in 0..<64 {
-        j := job.create(proc(data: rawptr) {
-            x := 1;
-            for i in 1..<100 {
-                x += i * i;
-                fmt.println(x);
-            }
-        });
-
-        job.schedule(j, &counter);
-    }
-
-    job.wait(counter = &counter, stay_on_thread = true);
-
     for engine.is_running() {
         engine.dispatch_input();
 

@@ -7,9 +7,6 @@ import "core:time"
 import "core:os"
 import "core:slice"
 
-// FOR DEBUG ONLY
-import "core:fmt"
-
 import "../core"
 
 Counter :: distinct u32; // Will be used strictly as an atomic
@@ -55,7 +52,7 @@ wait :: proc(counter: ^Counter, auto_cast target : Counter = 0, stay_on_thread :
     panic("Didn't have a large enough wait buffer");
 }
 
-Job_Proc :: #type proc(data: rawptr);
+Job_Proc :: #type proc(job: ^Job);
 
 Job :: struct {
     procedure : Job_Proc,
@@ -270,7 +267,7 @@ try_work :: proc() -> bool {
     if check_waiting(true) do return true;
 
     if job, ok := find_work(); ok {
-        job.procedure(job.data);
+        job.procedure(&job);
 
         if job.counter != nil {
             sync.atomic_sub(job.counter, 1, .Relaxed);
