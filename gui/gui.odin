@@ -3,6 +3,7 @@ package gui
 import "core:reflect"
 
 import "../core"
+import "../engine"
 
 Rect :: core.Rect;
 Linear_Color :: core.Linear_Color;
@@ -123,7 +124,79 @@ Gui :: struct {
     focus_was_set : bool,
     ignore_input  : bool,
 
-    
+    mouse_pos  : Vector2,
+    current_mb : [3]bool,    
+    old_mb     : [3]bool,
+
+    text_input     : [dynamic]rune,
+    keys_went_down : [255]bool,
+    keys_down      : [255]bool,
+
+    scale : f32,
 }
 
-@private gui : Gui;
+@private the_gui : Gui;
+
+init :: proc() {
+
+}
+
+begin :: proc(viewport: Rect) {
+    using the_gui;
+
+    focus_was_set = false;
+}
+
+end :: proc(dt: f32, viewport: Rect) {
+    using the_gui;
+
+    clear(&widgets);
+    clear(&layouts);
+
+    // TODO(colby): Destroy control state after a frame is missed
+}
+
+@(deferred_out=end_gui)
+scoped :: proc(dt: f32, viewport: Rect) -> (f32, Rect) {
+    begin(viewport);
+    return dt, viewport;
+}
+
+make_control :: proc(id: Id, $T: typeid) -> ^T {
+    using the_gui;
+
+    t := new(T);
+    t.variant = t^;
+    t.frame   = engine.get().frame;
+
+    controls[id.whole] = t;
+    return t;
+}
+
+delete_control :: proc(id: Id) -> bool {
+    using the_gui;
+
+    c := controls[id.whole];
+    if c == nil do return false;
+    free(c);
+    delete_key(&controls, id.whole);
+    return true;
+}
+
+find_control :: proc(id: Id) -> ^Control {
+    using the_gui;
+
+    return controls[id.whole];
+}
+
+find_or_make_control :: proc(id: Id, $T: typeid) -> ^T {
+    t := find_control(id);
+    if t == nil do t = make_control(id, T);
+    return &t.variant.(T);
+}
+
+set_focus :: proc(id: Id) {
+    using the_gui;
+    focused = id;
+    focuse_was_set = true;
+}

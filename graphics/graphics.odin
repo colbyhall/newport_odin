@@ -14,6 +14,8 @@ Matrix4 :: core.Matrix4;
 Rect    :: core.Rect;
 Linear_Color :: core.Linear_Color;
 
+v2 :: core.v2;
+
 // All supported types that can be a vertex attribute
 Vertex_Attributes :: union {
     i32,
@@ -278,4 +280,5 @@ init :: proc(details: Init_Details) {
 
     init_shader_catalog();
     init_texture_catalog();
+    init_font_collection_catalog();
 }
