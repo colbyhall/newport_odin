@@ -4,6 +4,8 @@ import "core:reflect"
 
 import "../core"
 import "../engine"
+import "../graphics"
+import "../graphics/draw"
 
 Rect :: core.Rect;
 Linear_Color :: core.Linear_Color;
@@ -82,7 +84,7 @@ Widget :: struct {
     color     : Linear_Color,
 
     // Scaled to the UI scale
-    // font : Font,
+    font      : Font,
     padding   : Vector2,
     roundness : f32,
 }

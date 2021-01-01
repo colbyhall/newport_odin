@@ -124,6 +124,55 @@ imm_rect :: proc{ imm_textured_rect, imm_solid_rect };
 
 rect :: imm_rect;
 
+imm_glyph :: proc(imm: ^Immediate_Renderer, glyph: graphics.Font_Glyph, font: graphics.Font, xy: Vector2, z: f32, color: Linear_Color, loc := #caller_location) {
+    xy := xy - v2(0, font.descent);
+    x0 := xy.x + glyph.bearing_x;
+    y1 := xy.y - glyph.bearing_y;
+    x1 := x0 + glyph.width;
+    y0 := y1 - glyph.height;
+
+    rect := Rect{ v2(x0, y0), v2(x1, y1) };
+
+    imm_rect(imm, rect, z, glyph.uv, Rect{}, color, loc);
+}
+
+glyph :: imm_glyph;
+
+imm_rune :: proc(imm: ^Immediate_Renderer, r: rune, font: graphics.Font, xy: Vector2, z: f32, color: Linear_Color, loc := #caller_location) -> (graphics.Font_Glyph, bool) {
+    glyph, ok := graphics.glyph_from_rune(font, r);
+    if ok do imm_glyph(imm, glyph, font, xy, z, color, loc);
+    return glyph, ok;
+}
+
+imm_string :: proc(imm: ^Immediate_Renderer, s: string, f: graphics.Font, xy: Vector2, z: f32, color: Linear_Color, max_width := 0.0, loc := #caller_location) {
+    orig_xy := xy;
+
+    xy := xy;
+
+    space_g, _ := graphics.glyph_from_rune(f, ' ');
+    for r in s {
+        /*
+        if max_width > 0 && xy.x + space_g.advance > orig_xy.x + max_width {
+            xy.x = orig_xy.x;
+            xy.y -= f.size;
+        }
+        */
+
+        switch r {
+        case '\n': 
+            xy.x = orig_xy.x;
+            xy.y -= f.size;
+        case '\r':
+            xy.x = orig_xy.x;
+        case '\t':
+            xy.x += space_g.advance * 4.0;
+        case:
+            g, ok := imm_rune(imm, r, f, xy, z, color, loc);
+            if ok do xy.x += g.advance;
+        }
+    }
+}
+
 render_right_handed :: proc(viewport: Rect, near : f32 = 0.1, far : f32 = 1000.0) -> (proj: Matrix4, view: Matrix4) {
     using core;
 
