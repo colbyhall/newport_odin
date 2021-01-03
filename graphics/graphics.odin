@@ -1,6 +1,7 @@
 package graphics
 
 import "../core"
+import "../engine"
 
 import "core:log"
 import "core:reflect"
@@ -265,18 +266,10 @@ get_base :: proc() -> ^Graphics {
 
 get :: proc{ get_casted, get_base };
 
-Init_Details :: struct {
-    graphics_type : typeid,
-}
-
-default_init_details :: proc() -> Init_Details {
-    return Init_Details{
-        graphics_type = typeid_of(Graphics),
-    };
-}
-
-init :: proc(details: Init_Details) {
-    state = cast(^Graphics)mem.alloc(reflect.size_of_typeid(details.graphics_type));
+init :: proc() {
+    assert(engine.get() != nil);
+    
+    init_vulkan();
 
     init_shader_catalog();
     init_texture_catalog();

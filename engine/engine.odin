@@ -10,7 +10,6 @@ import "core:time"
 import "core:fmt"
 
 import "../core"
-import "../graphics/gl"
 
 // Encompassing engine data structure that can be derived
 Engine :: struct {
@@ -113,19 +112,12 @@ init :: proc(details: Init_Details) {
 
     context = default_context();
 
-    // Start setting up all the stuff required for rendering
-    if !gl.load() do fmt.assertf(false, "[Engine] Failed to load opengl");
-
     window_failed := false;
     window, window_failed = core.make_window(details.project_name, 1280, 720);
 
     if !window_failed do fmt.assertf(false, "[Engine] Failed to create game window");
 
     core.add_event_listener(dispatcher(), the_engine^, window_input, INPUT_PRIORITY);
-
-    gl.create_surface(&window);
-
-    if !gl.make_current(window) do fmt.assertf(false, "[Engine] Failed to grab a modern gl context");
 }
 
 shutdown :: proc() {

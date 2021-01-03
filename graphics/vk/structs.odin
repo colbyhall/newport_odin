@@ -1,7 +1,7 @@
 //
 // Vulkan wrapper generated from "https://raw.githubusercontent.com/KhronosGroup/Vulkan-Headers/master/include/vulkan/vulkan_core.h"
 //
-package vulkan
+package vk
 
 import "core:c"
 
