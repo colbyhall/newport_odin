@@ -19,7 +19,6 @@ Engine :: struct {
     fps   : int,
 
     // Context stuff
-    frame_arena : mem.Arena,
     logger      : log.Logger,
     log_file    : os.Handle,
 
@@ -47,7 +46,6 @@ default_context :: proc() -> runtime.Context {
     c := runtime.default_context();
 
     c.logger = the_engine.logger;
-    c.temp_allocator = mem.arena_allocator(&the_engine.frame_arena);
 
     return c;
 }
@@ -55,14 +53,12 @@ default_context :: proc() -> runtime.Context {
 // Core's initialization details
 Init_Details :: struct {
     engine_type      : typeid,
-    frame_arena_size : int,
     project_name     : string,
 }
 
 default_init_details :: proc(project_name := "game") -> Init_Details {
     return Init_Details{
         engine_type = typeid_of(Engine),
-        frame_arena_size = mem.gigabytes(4),
         project_name = project_name,
     };
 }
@@ -86,8 +82,6 @@ init :: proc(details: Init_Details) {
     using the_engine;
 
     project_name = details.project_name;
-
-    mem.init_arena(&frame_arena, make([]byte, details.frame_arena_size));
 
     // Change directory to base project dir
     exe_path := core.exe_path();

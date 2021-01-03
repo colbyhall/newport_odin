@@ -23,8 +23,8 @@ wait :: proc(counter: ^Counter, auto_cast target : Counter = 0, stay_on_thread :
 
         if sync.atomic_load(&it.active, .Relaxed) do continue;
 
-        _, ok0 := sync.atomic_compare_exchange_weak(&it.in_use, false, true, .Sequentially_Consistent, .Relaxed);
-        if !ok0 do continue;
+        _, ok := sync.atomic_compare_exchange_weak(&it.in_use, false, true, .Sequentially_Consistent, .Relaxed);
+        if !ok do continue;
 
         sync.atomic_store(&it.active, true, .Relaxed);
 
@@ -38,11 +38,6 @@ wait :: proc(counter: ^Counter, auto_cast target : Counter = 0, stay_on_thread :
 
         if check_waiting() do return;
         free_fiber := find_fiber();
-
-        {
-            index, _ := slice.linear_search(system.fibers, free_fiber);
-            sync.atomic_store(&system.active_fibers[index], true, .Relaxed);
-        }
 
         system.fibers_on_thread[index] = free_fiber;
         switch_to_fiber(free_fiber);
@@ -196,7 +191,7 @@ find_work :: proc() -> (job: Job, ok: bool) {
     // Always do high priority jobs first
     if job, ok = dequeue_mpmc(&system.high_priority); ok do return;
 
-    if check_waiting() do return;
+    if check_waiting(true) do return;
 
     if job, ok = dequeue_mpmc(&system.normal_priority); ok do return;
     if job, ok = dequeue_mpmc(&system.low_priority); ok do return;
@@ -253,7 +248,9 @@ check_waiting :: proc(is_trying_work := false) -> bool {
         sync.atomic_store(&it.active, false, .Relaxed);
         sync.atomic_store(&it.in_use, false, .Relaxed);
 
-        if is_trying_work do sync.atomic_store(&system.active_fibers[index], false, .Relaxed);
+        if is_trying_work {
+            sync.atomic_store(&system.active_fibers[index], false, .Relaxed);
+        }
 
         system.fibers_on_thread[thread_index()] = it.fiber;
         switch_to_fiber(it.fiber);
@@ -264,15 +261,10 @@ check_waiting :: proc(is_trying_work := false) -> bool {
 }
 
 try_work :: proc() -> bool {
-    if check_waiting(true) do return true;
-
     if job, ok := find_work(); ok {
         job.procedure(&job);
 
-        if job.counter != nil {
-            sync.atomic_sub(job.counter, 1, .Relaxed);
-            check_waiting(true);
-        }
+        if job.counter != nil do sync.atomic_sub(job.counter, 1, .Relaxed);
 
         return true;
     }
