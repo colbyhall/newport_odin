@@ -1,4 +1,4 @@
-package graphics
+package gpu
 
 import "../core"
 import "../engine"
@@ -21,6 +21,7 @@ v2 :: core.v2;
 Shader_Type :: enum {
     Vertex,
     Fragment,
+    // TODO(colby): Compute
 }
 
 // All supported types that can be a vertex attribute
@@ -54,7 +55,7 @@ Texture_Format :: enum {
 
 // All supported texture wraps
 // 
-// @TODO(colby): Add more of these
+// TODO(colby): Add more of these
 Texture_Wrap :: enum {
     Clamp,
     Repeat,
@@ -137,9 +138,12 @@ Uniform_Map :: map[string]Uniforms;
 // Pipelines describe how the graphics API will draw something.
 //
 // Each underlying API has a different way of doing pipelines. So we want to abstract it out
-Pipeline_Details :: struct {
+Graphics_Pipeline_Description :: struct {
     shaders : []^Shader,
     vertex : typeid,
+
+    render_pass   : ^Render_Pass,
+    subpass_index : int,
 
     viewport : Rect,
     scissor  : Rect,
@@ -166,8 +170,8 @@ Pipeline_Details :: struct {
     depth_compare : Compare_Op,
 }
 
-default_pipeline_details :: proc() -> Pipeline_Details {
-    return Pipeline_Details{
+default_graphics_pipeline_description :: proc() -> Graphics_Pipeline_Description {
+    return Graphics_Pipeline_Description{
         draw_mode  = .Fill,
         line_width = 1.0,
 
@@ -191,60 +195,13 @@ default_pipeline_details :: proc() -> Pipeline_Details {
     };
 }
 
-Pipeline_Id :: int;
-
-Pipeline_Manager :: struct {
-    pipelines : map[Pipeline_Id]Pipeline,
-
-    last_id : Pipeline_Id,
-    active  : Pipeline_Id,  
-}
-
-@private
-_add_pipeline :: proc(pipeline: Pipeline, loc := #caller_location) -> Pipeline_Id {
-    check(loc);
-    using state;
-
-    pipeline_manager.last_id += 1;
-    pipeline_manager.pipelines[pipeline_manager.last_id] = pipeline;
-
-    return pipeline_manager.last_id;
-}
-
-@private
-_remove_pipeline :: proc(id: Pipeline_Id, loc := #caller_location) -> (Pipeline, bool) {
-    check(loc);
-    using state;
-
-    if id == 0 do return Pipeline{}, false;
-
-    elem, found := pipeline_manager.pipelines[id];
-    if !found do return Pipeline{}, false;
-
-    delete_key(&pipeline_manager.pipelines, id);
-
-    return elem, true;
-}
-
-set_pipeline :: proc(id: Pipeline_Id, uniforms: Uniform_Map, loc := #caller_location) {
-    state.pipeline_manager.active = id;
-    // begin_pipeline(id, uniforms, loc);
-}
-
-// @(deferred_out=end_pipeline)
-pipeline_scoped :: proc(id: Pipeline_Id, uniforms: Uniform_Map, loc := #caller_location) -> runtime.Source_Code_Location {
-    // begin_pipeline(id, uniforms, loc);
-    return loc;
-}
-
 // Global graphics state which contains managers and other info about graphics
 //
 // @see Pipeline_Manager
 Graphics :: struct {
-    pipeline_manager : Pipeline_Manager,
 }
 
-@private state : ^Graphics; // This is a ptr because the user may want to extend this in a child struct
+@private state : ^Graphics; // This is a ptr because the api may want to extend this in a child struct
 
 check :: proc(loc := #caller_location) {
     if state == nil {
@@ -270,7 +227,7 @@ init :: proc() {
     
     init_vulkan();
 
-    init_shader_catalog();
-    init_texture_catalog();
-    init_font_collection_catalog();
+    // init_shader_catalog();
+    // init_texture_catalog();
+    // init_font_collection_catalog();
 }

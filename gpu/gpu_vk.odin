@@ -1,4 +1,4 @@
-package graphics
+package gpu
 
 import "core:mem"
 import "core:dynlib"
@@ -35,8 +35,6 @@ Vulkan_Graphics :: struct {
     presentation_queue  : vk.Queue,
 
     swapchain : Vulkan_Swapchain,
-
-    render_pass : Render_Pass, // temp
 }
 
 instance_layers := [?]cstring{
@@ -291,7 +289,7 @@ init_vulkan :: proc() {
         }
     }
 
-    render_pass = make_render_pass(); // temp
+    render_pass: = make_render_pass(); // temp
 }
 
 Render_Pass :: struct {
@@ -366,12 +364,206 @@ init_shader :: proc(using s: ^Shader, contents: []byte) {
         pCode    = cast(^u32)&contents[0],
     };
 
+    // TODO(colby): somehow determine what type of shader this is.
+    // The question is whether we'll have metadata or just use the file extension
+
     using state := get(Vulkan_Graphics);
 
     result := vk.CreateShaderModule(logical_gpu, &create_info, nil, &module);
     assert(result == .SUCCESS);
 }
 
+Graphics_Pipeline :: struct {
+    using description : Graphics_Pipeline_Description,
+
+    handle : vk.Pipeline,
+    layout : vk.PipelineLayout,
+}
+
+make_graphics_pipeline :: proc(using description: Graphics_Pipeline_Description, loc := #caller_location) -> Graphics_Pipeline {
+    check(loc);
+
+    using state := get(Vulkan_Graphics);
+
+    assert(len(shaders) > 0);
+
+    // Setup all the shader stages and load into a buffer
+    shader_stages := make([]vk.PipelineShaderStageCreateInfo, len(shaders), context.temp_allocator);
+    for it, i in shaders {
+        if it == nil do continue;
+        assert(it.loaded);
+
+        stage : vk.ShaderStageFlag;
+        switch it.type {
+        case .Vertex:   stage = .VERTEX;
+        case .Fragment: stage = .FRAGMENT;
+        }
+
+        stage_info := vk.PipelineShaderStageCreateInfo{
+            sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
+            stage  = { stage },
+            module = it.module,
+            pName  = "main",
+        };
+
+        shader_stages[i] = stage_info;
+    }
+
+    // TODO(colby): Setup the vertex attributes
+    vertex_input_state := vk.PipelineVertexInputStateCreateInfo{
+        sType = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+    };  
+
+    input_assembly_state := vk.PipelineInputAssemblyStateCreateInfo{
+        sType    = .PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        topology = .TRIANGLE_LIST,
+    };
+
+    vk_viewport := vk.Viewport{
+        width    = f32(swapchain.extent.width),
+        height   = f32(swapchain.extent.height),
+        maxDepth = 1,
+    };
+
+    vk_scissor := vk.Rect2D{
+        extent = swapchain.extent,
+    };
+
+    viewport_state := vk.PipelineViewportStateCreateInfo{
+        sType           = .PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        viewportCount   = 1,
+        pViewports      = &vk_viewport,
+        scissorCount    = 1,
+        pScissors       = &vk_scissor,
+    };
+
+    polygon_mode : vk.PolygonMode;
+    switch draw_mode {
+    case .Fill:  polygon_mode = .FILL;
+    case .Line:  polygon_mode = .LINE;
+    case .Point: polygon_mode = .POINT;
+    }
+
+    cull : vk.CullModeFlags;
+    if .Front in cull_mode do cull |= { .FRONT };
+    if .Back in cull_mode do cull |= { .BACK };
+
+    // NOTE(colby): Depth Testing goes around here somewhere
+    rasterizer_state := vk.PipelineRasterizationStateCreateInfo{
+        sType       = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        polygonMode = polygon_mode,
+        cullMode    = cull,
+        frontFace   = .CLOCKWISE,
+        lineWidth   = line_width,
+    };
+
+    multisample_state := vk.PipelineMultisampleStateCreateInfo{
+        sType                   = .PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        rasterizationSamples    = { ._1 },
+        minSampleShading        = 1.0,
+    };
+
+    // Setting up blending and converting data types
+    vk_blend_factor :: proc(fc: Blend_Factor) -> vk.BlendFactor{
+        switch fc {
+        case .Zero: return .ZERO;
+        case .One:  return .ONE;
+        case .Src_Color: return .SRC_COLOR;
+        case .One_Minus_Src_Color: return .ONE_MINUS_SRC_COLOR;
+        case .Dst_Color: return .DST_COLOR;
+        case .One_Minus_Dst_Color: return .ONE_MINUS_DST_COLOR;
+        case .Src_Alpha: return .SRC_ALPHA;
+        case .One_Minus_Src_Alpha: return .ONE_MINUS_SRC_ALPHA;
+        }
+
+        return .ZERO;
+    }
+
+    vk_blend_op :: proc(a: Blend_Op) -> vk.BlendOp{
+        switch a {
+        case .Add: return .ADD;
+        case .Subtract: return .SUBTRACT;
+        case .Reverse_Subtract: return .REVERSE_SUBTRACT;
+        case .Min: return .MIN;
+        case .Max: return .MAX;
+        }
+
+        return .ADD;
+    }
+
+    color_write_mask : vk.ColorComponentFlags;
+    if .Red   in color_mask do color_write_mask |= { .R };
+    if .Green in color_mask do color_write_mask |= { .G };
+    if .Blue  in color_mask do color_write_mask |= { .B };
+    if .Alpha in color_mask do color_write_mask |= { .A };
+
+    color_blend_attachment := vk.PipelineColorBlendAttachmentState{
+        blendEnable = b32(blend_enabled),
+        srcColorBlendFactor = vk_blend_factor(src_color_blend_factor),
+        dstColorBlendFactor = vk_blend_factor(dst_color_blend_factor),
+        colorBlendOp = vk_blend_op(color_blend_op),
+
+        srcAlphaBlendFactor = vk_blend_factor(src_alpha_blend_factor),
+        dstAlphaBlendFactor = vk_blend_factor(dst_alpha_blend_factor),
+        alphaBlendOp = vk_blend_op(alpha_blend_op),
+        colorWriteMask = color_write_mask,
+    };
+
+    color_blend_state := vk.PipelineColorBlendStateCreateInfo{
+        sType           = .PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        logicOp         = .COPY,
+        attachmentCount = 1,
+        pAttachments    = &color_blend_attachment,
+    };
+
+    // Creating the dynamic states
+    dynamic_states := [?]vk.DynamicState {
+        .VIEWPORT,
+        .SCISSOR,
+        .LINE_WIDTH,
+    };
+
+    dynamic_state := vk.PipelineDynamicStateCreateInfo{
+        sType               = .PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        dynamicStateCount   = u32(len(dynamic_states)),
+        pDynamicStates      = &dynamic_states[0],
+    };
+
+    // TODO(colby): Look into what a pipeline layout is and why
+    pipeline_layout_info := vk.PipelineLayoutCreateInfo{
+        sType = .PIPELINE_LAYOUT_CREATE_INFO,
+    };
+
+    layout : vk.PipelineLayout;
+    result := vk.CreatePipelineLayout(logical_gpu, &pipeline_layout_info, nil, &layout);
+    assert(result == .SUCCESS);
+
+    create_info := vk.GraphicsPipelineCreateInfo{
+        sType               = .GRAPHICS_PIPELINE_CREATE_INFO,
+        stageCount          = u32(len(shader_stages)),
+        pStages             = &shader_stages[0],
+        pVertexInputState   = &vertex_input_state,
+        pInputAssemblyState = &input_assembly_state,
+        pViewportState      = &viewport_state,
+        pRasterizationState = &rasterizer_state,
+        pMultisampleState   = &multisample_state,
+        pColorBlendState    = &color_blend_state,
+        renderPass          = render_pass.handle,
+        subpass             = u32(subpass_index),
+        basePipelineIndex   = -1,
+    };
+
+    // TODO(colby): Look into pipeline caches
+    handle : vk.Pipeline;
+    result = vk.CreateGraphicsPipelines(logical_gpu, 0, 1, &create_info, nil, &handle);
+    assert(result == .SUCCESS);
+
+    return Graphics_Pipeline{ 
+        description = description, 
+        handle      = handle, 
+        layout      = layout 
+    };
+}
 
 // UNIMPLEMENTED
 Texture2d :: struct {
