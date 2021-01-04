@@ -9,7 +9,7 @@ Shader_Catalog :: asset.Catalog(Shader);
 shader_catalog : Shader_Catalog;
 
 init_shader_catalog :: proc() {
-    append(&shader_catalog.extensions, "glsl");
+    // append(&shader_catalog.extensions, "glsl");
 
     asset.init_catalog(&shader_catalog, "Shader Catalog", register_shader, reload_shader);
 }
@@ -29,15 +29,13 @@ reload_shader :: proc(cat: ^asset.Catalog_Base, name: string, path: string, unlo
     cat := cast(^Shader_Catalog)cat;
 
     source, found := os.read_entire_file(path);
-    if !found do return false;
+    assert(found);
+
     defer delete(source);
 
     shader := cat.assets[name];
 
-    if !compile_shader(shader, cstring(&source[0])) {
-        log.infof("[Asset] Failed to compile shader \"{}\"", path);
-        return false;
-    }
+    init_shader(shader, source);
 
     log.infof("[Asset] Loaded shader \"{}\"", path);
 

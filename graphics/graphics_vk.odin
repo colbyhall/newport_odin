@@ -8,9 +8,18 @@ import "core:log"
 
 import "vk"
 import "../engine"
+import "../asset"
 
 when ODIN_OS == "windows" { 
     import "core:sys/win32"
+}
+
+Vulkan_Swapchain :: struct {
+    handle : vk.SwapchainKHR,
+
+    extent : vk.Extent2D,
+    images : []vk.Image,
+    views  : []vk.ImageView,
 }
 
 Vulkan_Graphics :: struct {
@@ -24,6 +33,10 @@ Vulkan_Graphics :: struct {
 
     graphics_queue      : vk.Queue,
     presentation_queue  : vk.Queue,
+
+    swapchain : Vulkan_Swapchain,
+
+    render_pass : Render_Pass, // temp
 }
 
 instance_layers := [?]cstring{
@@ -155,9 +168,9 @@ init_vulkan :: proc() {
     }
 
     assert(graphics_family_index != -1 && surface_family_index != -1);
-    queue_family_indices := [?]int{
-        graphics_family_index,
-        surface_family_index,
+    queue_family_indices := [?]u32{
+        u32(graphics_family_index),
+        u32(surface_family_index),
     };
 
     // Setup the logical device and queues
@@ -168,7 +181,7 @@ init_vulkan :: proc() {
         for index, i in queue_family_indices {
             create_info := vk.DeviceQueueCreateInfo{
                 sType            = .DEVICE_QUEUE_CREATE_INFO,
-                queueFamilyIndex = u32(index),
+                queueFamilyIndex = index,
                 queueCount       = 1,
                 pQueuePriorities  = &queue_priority,
             };
@@ -199,5 +212,179 @@ init_vulkan :: proc() {
         vk.GetDeviceQueue(logical_gpu, u32(surface_family_index), 0, &presentation_queue);
     }
 
-    
+    // Create the swap chain
+    // TODO(colby): Abstract out into its own function for swap chain creation
+    {
+        capabilities : vk.SurfaceCapabilitiesKHR;
+        vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(physical_gpu, surface, &capabilities);
+
+        format_count : u32;
+        vk.GetPhysicalDeviceSurfaceFormatsKHR(physical_gpu, surface, &format_count, nil);
+
+        formats := make([]vk.SurfaceFormatKHR, int(format_count), context.temp_allocator);
+        vk.GetPhysicalDeviceSurfaceFormatsKHR(physical_gpu, surface, &format_count, &formats[0]);
+
+        format : ^vk.SurfaceFormatKHR;
+        for it in &formats {
+            if it.format == .B8G8R8A8_SRGB && it.colorSpace == .SRGB_NONLINEAR {
+                format = &it;
+                break;
+            }
+        }
+        assert(format != nil);
+
+        present_mode := vk.PresentModeKHR.FIFO;
+
+        create_info := vk.SwapchainCreateInfoKHR{
+            sType            = .SWAPCHAIN_CREATE_INFO_KHR,
+            surface          = surface,
+            minImageCount    = capabilities.minImageCount,
+            imageFormat      = format.format,
+            imageColorSpace  = format.colorSpace,
+            imageExtent      = capabilities.currentExtent,
+            imageArrayLayers = 1,
+            imageUsage       = { .COLOR_ATTACHMENT },
+            imageSharingMode = .CONCURRENT,
+
+            queueFamilyIndexCount = u32(len(queue_family_indices)),
+            pQueueFamilyIndices   = &queue_family_indices[0],
+
+            preTransform     = capabilities.currentTransform,
+            compositeAlpha   = { .OPAQUE },
+            presentMode      = present_mode,
+            clipped          = true,
+        };
+
+        using swapchain;
+
+        result := vk.CreateSwapchainKHR(logical_gpu, &create_info, nil, &handle);
+        assert(result == .SUCCESS);
+
+        image_count : u32;
+        vk.GetSwapchainImagesKHR(logical_gpu, handle, &image_count, nil);
+
+        images = make([]vk.Image, int(image_count));
+        vk.GetSwapchainImagesKHR(logical_gpu, handle, &image_count, &images[0]);
+
+        views = make([]vk.ImageView, int(image_count));
+
+        for _, i in images {
+            component_mapping := vk.ComponentMapping{ .IDENTITY, .IDENTITY, .IDENTITY, .IDENTITY };
+
+            subresource_range := vk.ImageSubresourceRange{
+                aspectMask = { .COLOR },
+                levelCount = 1,
+                layerCount = 1,
+            };
+
+            create_info := vk.ImageViewCreateInfo{
+                sType       = .IMAGE_VIEW_CREATE_INFO,
+                image       = images[i],
+                viewType    = .D2,
+                format      = .B8G8R8A8_SRGB,
+                components  = component_mapping,
+                subresourceRange = subresource_range,
+            };
+
+            result := vk.CreateImageView(logical_gpu, &create_info, nil, &views[i]);
+            assert(result == .SUCCESS);
+        }
+    }
+
+    render_pass = make_render_pass(); // temp
+}
+
+Render_Pass :: struct {
+    handle : vk.RenderPass,
+}
+
+// TODO(colby): Super not finished
+make_render_pass :: proc(loc := #caller_location) -> Render_Pass {
+    check(loc);
+
+    attachment := vk.AttachmentDescription{
+        format  = .B8G8R8A8_SRGB,
+        samples = { ._1 },
+        loadOp  = .CLEAR,
+        storeOp = .STORE,
+
+        stencilLoadOp  = .DONT_CARE,
+        stencilStoreOp = .DONT_CARE,
+
+        initialLayout = .UNDEFINED,
+        finalLayout   = .PRESENT_SRC_KHR,
+    };
+
+    attachment_ref := vk.AttachmentReference{
+        attachment  = 0,
+        layout      = .COLOR_ATTACHMENT_OPTIMAL,
+    };
+
+    subpass := vk.SubpassDescription{
+        pipelineBindPoint    = .GRAPHICS,
+        colorAttachmentCount = 1,
+        pColorAttachments    = &attachment_ref,
+    };
+
+    dependency := vk.SubpassDependency{
+        srcSubpass    = vk.SUBPASS_EXTERNAL,
+        srcStageMask  = { .COLOR_ATTACHMENT_OUTPUT },
+        dstStageMask  = { .COLOR_ATTACHMENT_OUTPUT },
+        dstAccessMask = { .COLOR_ATTACHMENT_WRITE },
+    };
+
+    create_info := vk.RenderPassCreateInfo{
+        sType           = .RENDER_PASS_CREATE_INFO,
+        attachmentCount = 1,
+        pAttachments    = &attachment,
+        subpassCount    = 1,
+        pSubpasses      = &subpass,
+        dependencyCount = 1,
+        pDependencies   = &dependency,
+    };
+
+    using state := get(Vulkan_Graphics);
+
+    handle : vk.RenderPass;
+    result := vk.CreateRenderPass(logical_gpu, &create_info, nil, &handle);
+    return Render_Pass{ handle = handle };
+}
+
+Shader :: struct {
+    using asset : asset.Asset,
+
+    type   : Shader_Type,
+    module : vk.ShaderModule,
+}
+
+init_shader :: proc(using s: ^Shader, contents: []byte) {
+    check();
+
+    create_info := vk.ShaderModuleCreateInfo{
+        sType    = .SHADER_MODULE_CREATE_INFO,
+        codeSize = len(contents),
+        pCode    = cast(^u32)&contents[0],
+    };
+
+    using state := get(Vulkan_Graphics);
+
+    result := vk.CreateShaderModule(logical_gpu, &create_info, nil, &module);
+    assert(result == .SUCCESS);
+}
+
+
+// UNIMPLEMENTED
+Texture2d :: struct {
+    using asset : asset.Asset,
+
+    pixels : []u8,
+    width, height, depth: int,
+}
+
+upload_texture :: proc(using t: ^Texture2d) -> bool {
+    return false;
+}
+
+Pipeline :: struct {
+
 }

@@ -17,6 +17,12 @@ Linear_Color :: core.Linear_Color;
 
 v2 :: core.v2;
 
+// All supported types of shaders
+Shader_Type :: enum {
+    Vertex,
+    Fragment,
+}
+
 // All supported types that can be a vertex attribute
 Vertex_Attributes :: union {
     i32,
@@ -132,7 +138,7 @@ Uniform_Map :: map[string]Uniforms;
 //
 // Each underlying API has a different way of doing pipelines. So we want to abstract it out
 Pipeline_Details :: struct {
-    shader : ^Shader,
+    shaders : []^Shader,
     vertex : typeid,
 
     viewport : Rect,
@@ -222,12 +228,12 @@ _remove_pipeline :: proc(id: Pipeline_Id, loc := #caller_location) -> (Pipeline,
 
 set_pipeline :: proc(id: Pipeline_Id, uniforms: Uniform_Map, loc := #caller_location) {
     state.pipeline_manager.active = id;
-    begin_pipeline(id, uniforms, loc);
+    // begin_pipeline(id, uniforms, loc);
 }
 
-@(deferred_out=end_pipeline)
+// @(deferred_out=end_pipeline)
 pipeline_scoped :: proc(id: Pipeline_Id, uniforms: Uniform_Map, loc := #caller_location) -> runtime.Source_Code_Location {
-    begin_pipeline(id, uniforms, loc);
+    // begin_pipeline(id, uniforms, loc);
     return loc;
 }
 
@@ -245,13 +251,6 @@ check :: proc(loc := #caller_location) {
         log.errorf("[Graphics] Can't do graphics work if graphics is not initiallized. Call graphics.init before {} {}", loc.file_path, loc.line);
         assert(false);
     }
-}
-
-is_pipeline_active :: proc(id : Pipeline_Id = 0, loc := #caller_location) -> bool {
-    check(loc);
-
-    if id == 0 do return state.pipeline_manager.active != 0;
-    return state.pipeline_manager.active == id;
 }
 
 // @returns the graphics ptr casted to type T
