@@ -273,7 +273,7 @@ try_work :: proc() -> bool {
 
 wait_for_work :: proc() {
     for !sync.atomic_load(&system.is_shutdown, .Relaxed) {
-        if !try_work() do time.sleep(100);
+        if !try_work() do time.sleep(1000);
     }
 }
 

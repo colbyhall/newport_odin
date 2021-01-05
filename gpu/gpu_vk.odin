@@ -3,8 +3,9 @@ package gpu
 import "core:mem"
 import "core:dynlib"
 import "core:runtime"
-import "core:fmt"
 import "core:log"
+
+import "core:fmt" // temp
 
 import "vk"
 import "../engine"
@@ -17,9 +18,12 @@ when ODIN_OS == "windows" {
 Vulkan_Swapchain :: struct {
     handle : vk.SwapchainKHR,
 
-    extent : vk.Extent2D,
-    images : []vk.Image,
-    views  : []vk.ImageView,
+    extent       : vk.Extent2D,
+    images       : []vk.Image,
+    views        : []vk.ImageView,
+    framebuffers : []vk.Framebuffer,
+
+    render_pass : Render_Pass,
 }
 
 Vulkan_Graphics :: struct {
@@ -34,7 +38,16 @@ Vulkan_Graphics :: struct {
     graphics_queue      : vk.Queue,
     presentation_queue  : vk.Queue,
 
+    graphics_family_index  : u32,
+    surface_family_index   : u32,
+
     swapchain : Vulkan_Swapchain,
+
+    command_pool    : vk.CommandPool,
+    command_buffers : [2]vk.CommandBuffer,
+
+    image_available_semaphore : vk.Semaphore,
+    render_finished_semaphore : vk.Semaphore,
 }
 
 instance_layers := [?]cstring{
@@ -142,9 +155,6 @@ init_vulkan :: proc() {
         physical_gpu = selected_gpu;
     }
 
-    graphics_family_index := -1;
-    surface_family_index := -1;
-
     // Find the proper queue family indices
     {
         queue_family_count : u32;
@@ -156,19 +166,18 @@ init_vulkan :: proc() {
 
         for queue_family, i in queue_families {
             if .GRAPHICS in queue_family.queueFlags {
-                graphics_family_index = i;
+                graphics_family_index = u32(i);
             }
 
             present_support : b32;
             vk.GetPhysicalDeviceSurfaceSupportKHR(physical_gpu, u32(i), surface, &present_support);
-            if present_support do surface_family_index = i;
+            if present_support do surface_family_index = u32(i);
         }
     }
 
-    assert(graphics_family_index != -1 && surface_family_index != -1);
     queue_family_indices := [?]u32{
-        u32(graphics_family_index),
-        u32(surface_family_index),
+        graphics_family_index,
+        surface_family_index,
     };
 
     // Setup the logical device and queues
@@ -206,8 +215,8 @@ init_vulkan :: proc() {
         result := vk.CreateDevice(physical_gpu, &logical_device_create_info, nil, &logical_gpu);
         assert(result == .SUCCESS);
 
-        vk.GetDeviceQueue(logical_gpu, u32(graphics_family_index), 0, &graphics_queue);
-        vk.GetDeviceQueue(logical_gpu, u32(surface_family_index), 0, &presentation_queue);
+        vk.GetDeviceQueue(logical_gpu, graphics_family_index, 0, &graphics_queue);
+        vk.GetDeviceQueue(logical_gpu, surface_family_index, 0, &presentation_queue);
     }
 
     // Create the swap chain
@@ -255,6 +264,8 @@ init_vulkan :: proc() {
 
         using swapchain;
 
+        extent = capabilities.currentExtent;
+
         result := vk.CreateSwapchainKHR(logical_gpu, &create_info, nil, &handle);
         assert(result == .SUCCESS);
 
@@ -287,9 +298,135 @@ init_vulkan :: proc() {
             result := vk.CreateImageView(logical_gpu, &create_info, nil, &views[i]);
             assert(result == .SUCCESS);
         }
+
+        render_pass = make_render_pass();
+
+        framebuffers = make([]vk.Framebuffer, int(image_count));
+
+        for _, i in framebuffers {
+            create_info := vk.FramebufferCreateInfo{
+                sType           = .FRAMEBUFFER_CREATE_INFO,
+                renderPass      = render_pass.handle,
+                attachmentCount = 1,
+                pAttachments    = &views[i],
+                width           = extent.width,
+                height          = extent.height,
+                layers          = 1,
+            };
+
+            result := vk.CreateFramebuffer(logical_gpu, &create_info, nil, &framebuffers[i]);
+            assert(result == .SUCCESS);
+        }
     }
 
-    render_pass: = make_render_pass(); // temp
+    // Create semaphores
+    {
+        create_info := vk.SemaphoreCreateInfo{
+            sType = .SEMAPHORE_CREATE_INFO,
+        };
+
+        result := vk.CreateSemaphore(logical_gpu, &create_info, nil, &image_available_semaphore);
+        assert(result == .SUCCESS);
+
+        result = vk.CreateSemaphore(logical_gpu, &create_info, nil, &render_finished_semaphore);
+        assert(result == .SUCCESS);
+    }
+}
+
+fill_command_buffer :: proc(pipeline: ^Graphics_Pipeline) {
+    using state := get(Vulkan_Graphics);
+
+    // Create the command buffers and fill them
+    {
+        pool_create_info := vk.CommandPoolCreateInfo{
+            sType            = .COMMAND_POOL_CREATE_INFO,
+            queueFamilyIndex = graphics_family_index,
+        };
+
+        result := vk.CreateCommandPool(logical_gpu, &pool_create_info, nil, &command_pool);
+        assert(result == .SUCCESS);
+
+        alloc_info := vk.CommandBufferAllocateInfo{
+            sType               = .COMMAND_BUFFER_ALLOCATE_INFO,
+            commandPool         = command_pool,
+            level               = .PRIMARY,
+            commandBufferCount  = u32(len(command_buffers)),
+        };
+
+        result = vk.AllocateCommandBuffers(logical_gpu, &alloc_info, &command_buffers[0]);
+        assert(result == .SUCCESS);
+
+        for it, i in &command_buffers {
+            begin_info := vk.CommandBufferBeginInfo{
+                sType = .COMMAND_BUFFER_BEGIN_INFO,
+                flags = { .SIMULTANEOUS_USE },
+            };
+
+            result = vk.BeginCommandBuffer(it, &begin_info);
+            assert(result == .SUCCESS);
+
+            // Start a render pass
+            {
+                render_area := vk.Rect2D{ extent = swapchain.extent };
+                clear_color : vk.ClearValue;
+                clear_color.color.float32 = { 0, 0, 0, 1 };
+
+                begin_info := vk.RenderPassBeginInfo{
+                    sType           = .RENDER_PASS_BEGIN_INFO,
+                    renderPass      = swapchain.render_pass.handle,
+                    framebuffer     = swapchain.framebuffers[i],
+                    renderArea      = render_area,
+                    clearValueCount = 1,
+                    pClearValues    = &clear_color,
+                };
+
+                vk.CmdBeginRenderPass(it, &begin_info, .INLINE);
+            }
+
+            vk.CmdBindPipeline(it, .GRAPHICS, pipeline.handle);
+
+            vk.CmdDraw(it, 3, 1, 0, 0);
+
+            vk.CmdEndRenderPass(it);
+
+            result = vk.EndCommandBuffer(it);
+            assert(result == .SUCCESS);
+        }
+    }
+}
+
+do_draw :: proc() {
+    using state := get(Vulkan_Graphics);
+
+    image_index : u32;
+    vk.AcquireNextImageKHR(logical_gpu, swapchain.handle, (1 << 64 - 1), image_available_semaphore, 0, &image_index);
+
+    wait_stage : vk.PipelineStageFlags = { .COLOR_ATTACHMENT_OUTPUT };
+
+    submit_info := vk.SubmitInfo{
+        sType                = .SUBMIT_INFO,
+        waitSemaphoreCount   = 1,
+        pWaitSemaphores      = &image_available_semaphore,
+        pWaitDstStageMask    = &wait_stage,
+        commandBufferCount   = 1,
+        pCommandBuffers      = &command_buffers[int(image_index)],
+        signalSemaphoreCount = 1,
+        pSignalSemaphores    = &render_finished_semaphore,
+    };
+
+    vk.QueueSubmit(graphics_queue, 1, &submit_info, 0);
+
+    present_info := vk.PresentInfoKHR{
+        sType               = .PRESENT_INFO_KHR,
+        waitSemaphoreCount  = 1,
+        pWaitSemaphores     = &render_finished_semaphore,
+        swapchainCount      = 1,
+        pSwapchains         = &swapchain.handle,
+        pImageIndices       = &image_index,
+    };
+
+    vk.QueuePresentKHR(presentation_queue, &present_info);
+    vk.QueueWaitIdle(presentation_queue);
 }
 
 Render_Pass :: struct {
@@ -548,6 +685,8 @@ make_graphics_pipeline :: proc(using description: Graphics_Pipeline_Description,
         pRasterizationState = &rasterizer_state,
         pMultisampleState   = &multisample_state,
         pColorBlendState    = &color_blend_state,
+        // pDynamicState       = &dynamic_state,
+        layout              = layout,
         renderPass          = render_pass.handle,
         subpass             = u32(subpass_index),
         basePipelineIndex   = -1,
@@ -575,8 +714,4 @@ Texture2d :: struct {
 
 upload_texture :: proc(using t: ^Texture2d) -> bool {
     return false;
-}
-
-Pipeline :: struct {
-
 }
