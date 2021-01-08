@@ -195,6 +195,10 @@ default_graphics_pipeline_description :: proc() -> Graphics_Pipeline_Description
     };
 }
 
+Command_Allocator_Type :: enum {
+    Graphics,
+}
+
 // Global graphics state which contains managers and other info about graphics
 //
 // @see Pipeline_Manager

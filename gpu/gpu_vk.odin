@@ -21,9 +21,18 @@ Vulkan_Swapchain :: struct {
     extent       : vk.Extent2D,
     images       : []vk.Image,
     views        : []vk.ImageView,
-    framebuffers : []vk.Framebuffer,
+    framebuffers : []Framebuffer,
 
     render_pass : Render_Pass,
+}
+
+acquire_next_swapchain_framebuffer :: proc() -> ^Framebuffer {
+    using state := get(Vulkan_Graphics);
+
+    image_index : u32;
+    vk.AcquireNextImageKHR(logical_gpu, swapchain.handle, (1 << 64 - 1), image_available_semaphore, 0, &image_index);
+
+    return &swapchain.framebuffers[int(image_index)];
 }
 
 Vulkan_Graphics :: struct {
@@ -43,8 +52,8 @@ Vulkan_Graphics :: struct {
 
     swapchain : Vulkan_Swapchain,
 
-    command_pool    : vk.CommandPool,
-    command_buffers : [2]vk.CommandBuffer,
+    // command_pool    : vk.CommandPool,
+    // command_buffers : [2]vk.CommandBuffer,
 
     image_available_semaphore : vk.Semaphore,
     render_finished_semaphore : vk.Semaphore,
@@ -301,9 +310,9 @@ init_vulkan :: proc() {
 
         render_pass = make_render_pass();
 
-        framebuffers = make([]vk.Framebuffer, int(image_count));
+        framebuffers = make([]Framebuffer, int(image_count));
 
-        for _, i in framebuffers {
+        for it, i in &framebuffers {
             create_info := vk.FramebufferCreateInfo{
                 sType           = .FRAMEBUFFER_CREATE_INFO,
                 renderPass      = render_pass.handle,
@@ -314,8 +323,13 @@ init_vulkan :: proc() {
                 layers          = 1,
             };
 
-            result := vk.CreateFramebuffer(logical_gpu, &create_info, nil, &framebuffers[i]);
+            handle : vk.Framebuffer;
+            result := vk.CreateFramebuffer(logical_gpu, &create_info, nil, &handle);
             assert(result == .SUCCESS);
+
+            it.handle = handle;
+            it.width  = int(extent.width);
+            it.height = int(extent.height);
         }
     }
 
@@ -333,6 +347,7 @@ init_vulkan :: proc() {
     }
 }
 
+/*
 fill_command_buffer :: proc(pipeline: ^Graphics_Pipeline) {
     using state := get(Vulkan_Graphics);
 
@@ -428,6 +443,7 @@ do_draw :: proc() {
     vk.QueuePresentKHR(presentation_queue, &present_info);
     vk.QueueWaitIdle(presentation_queue);
 }
+*/
 
 Render_Pass :: struct {
     handle : vk.RenderPass,
@@ -702,6 +718,193 @@ make_graphics_pipeline :: proc(using description: Graphics_Pipeline_Description,
         handle      = handle, 
         layout      = layout 
     };
+}
+
+Command_Allocator :: struct {
+    handle : vk.CommandPool,
+    type   : Command_Allocator_Type,
+}
+
+make_command_allocator :: proc(type: Command_Allocator_Type) -> Command_Allocator {
+    using state := get(Vulkan_Graphics);
+
+    create_info := vk.CommandPoolCreateInfo{
+        sType            = .COMMAND_POOL_CREATE_INFO,
+        queueFamilyIndex = graphics_family_index,
+    };
+
+    handle : vk.CommandPool;
+    result := vk.CreateCommandPool(logical_gpu, &create_info, nil, &handle);
+    assert(result == .SUCCESS);
+
+    return Command_Allocator{ handle = handle, type = type };
+}
+
+delete_command_allocator :: proc(using alloc: ^Command_Allocator) {
+    using state := get(Vulkan_Graphics);
+
+    vk.DestroyCommandPool(logical_gpu, handle, nil);
+    handle = 0;
+}
+
+Command_Buffer :: struct {
+    handle    : vk.CommandBuffer,
+}
+
+make_command_buffer_single :: proc(alloc: Command_Allocator) -> Command_Buffer {
+    using state := get(Vulkan_Graphics);
+
+    alloc_info := vk.CommandBufferAllocateInfo{
+        sType               = .COMMAND_BUFFER_ALLOCATE_INFO,
+        commandPool         = alloc.handle,
+        level               = .PRIMARY,
+        commandBufferCount  = 1,
+    };
+
+    handle : vk.CommandBuffer;
+    result := vk.AllocateCommandBuffers(logical_gpu, &alloc_info, &handle);
+    assert(result == .SUCCESS);
+
+    return Command_Buffer{ handle = handle };
+}
+
+make_command_buffers :: proc(alloc: Command_Allocator, len: int, slice_allocator := context.allocator) -> []Command_Buffer {
+    using state := get(Vulkan_Graphics);
+
+    alloc_info := vk.CommandBufferAllocateInfo{
+        sType               = .COMMAND_BUFFER_ALLOCATE_INFO,
+        commandPool         = alloc.handle,
+        level               = .PRIMARY,
+        commandBufferCount  = u32(len),
+    };
+
+    // HACK(colby): Doing this to prevent multiple allocation. This will break is more members are added to Command_Buffer
+    results := make([]Command_Buffer, len, slice_allocator);
+    result := vk.AllocateCommandBuffers(logical_gpu, &alloc_info, &results[0].handle);
+    assert(result == .SUCCESS);
+
+    return results;
+}
+
+make_command_buffer :: proc{ make_command_buffer_single, make_command_buffers };
+
+reset_command_buffer :: proc(buffer: Command_Buffer) {
+    result := vk.ResetCommandBuffer(buffer.handle, {});
+    assert(result == .SUCCESS);
+}
+
+begin_command_buffer :: proc(buffer: Command_Buffer) {
+    begin_info := vk.CommandBufferBeginInfo{
+        sType = .COMMAND_BUFFER_BEGIN_INFO,
+        flags = { .SIMULTANEOUS_USE },
+    };
+
+    result := vk.BeginCommandBuffer(buffer.handle, &begin_info);
+    assert(result == .SUCCESS);
+}
+
+end_command_buffer :: proc(buffer: Command_Buffer) {
+    result := vk.EndCommandBuffer(buffer.handle);
+    assert(result == .SUCCESS);
+}
+
+@(deferred_out=end_command_buffer)
+record_scope :: proc(buffer: Command_Buffer) -> Command_Buffer {
+    begin_command_buffer(buffer);
+    return buffer;
+}
+
+begin_render_pass :: proc(buffer: Command_Buffer, render_pass: ^Render_Pass, framebuffer: ^Framebuffer) {
+    extent := vk.Extent2D{
+        width  = u32(framebuffer.width),
+        height = u32(framebuffer.height)
+    };
+
+    render_area := vk.Rect2D{ extent = extent };
+
+    // TODO(colby): Figure out where to put clear values and such
+    clear_color : vk.ClearValue;
+    clear_color.color.float32 = { 0, 0, 0, 1 };
+
+    begin_info := vk.RenderPassBeginInfo{
+        sType           = .RENDER_PASS_BEGIN_INFO,
+        renderPass      = render_pass.handle,
+        framebuffer     = framebuffer.handle,
+        renderArea      = render_area,
+        clearValueCount = 1,
+        pClearValues    = &clear_color,
+    };
+
+    vk.CmdBeginRenderPass(buffer.handle, &begin_info, .INLINE);
+}
+
+end_render_pass :: proc(buffer: Command_Buffer) {
+    vk.CmdEndRenderPass(buffer.handle);
+}
+
+@(deferred_out=end_command_buffer)
+render_pass :: proc(buffer: Command_Buffer, render_pass: ^Render_Pass, framebuffer: ^Framebuffer) -> Command_Buffer {
+    begin_render_pass(buffer, render_pass, framebuffer);
+    return buffer;
+}
+
+draw :: proc(buffer: Command_Buffer, auto_cast vertex_count: int, auto_cast first_vertex := 0) {
+    vk.CmdDraw(buffer.handle, u32(vertex_count), 1, u32(first_vertex), 0);
+}
+
+submit_multiple :: proc(buffers: []Command_Buffer) {
+    using state := get(Vulkan_Graphics);
+
+    wait_stage : vk.PipelineStageFlags = { .COLOR_ATTACHMENT_OUTPUT };
+
+    submit_info := vk.SubmitInfo{
+        sType                = .SUBMIT_INFO,
+        waitSemaphoreCount   = 1,
+        pWaitSemaphores      = &image_available_semaphore,
+        pWaitDstStageMask    = &wait_stage,
+        commandBufferCount   = u32(len(buffers)),
+        pCommandBuffers      = &buffers[0],
+        signalSemaphoreCount = 1,
+        pSignalSemaphores    = &render_finished_semaphore,
+    };
+
+    vk.QueueSubmit(graphics_queue, 1, &submit_info, 0);
+}
+
+submit_single :: proc(buffer: Command_Buffer) {
+    single := [?]Command_Buffer{ buffer };
+    submit_multiple(single[:]);
+}
+
+submit :: proc{ submit_multiple, submit_single };
+
+display :: proc(framebuffer: ^Framebuffer) {
+    using state := get(Vulkan_Graphics);
+
+    image_index : u32;
+    for it, i in swapchain.framebuffers {
+        if it.handle == framebuffer.handle {
+            image_index = u32(i);
+            break;
+        }
+    }
+
+    present_info := vk.PresentInfoKHR{
+        sType               = .PRESENT_INFO_KHR,
+        waitSemaphoreCount  = 1,
+        pWaitSemaphores     = &render_finished_semaphore,
+        swapchainCount      = 1,
+        pSwapchains         = &swapchain.handle,
+        pImageIndices       = &image_index,
+    };
+
+    vk.QueuePresentKHR(presentation_queue, &present_info);
+    vk.QueueWaitIdle(presentation_queue);
+}
+
+Framebuffer :: struct {
+    handle        : vk.Framebuffer,
+    width, height : int,
 }
 
 // UNIMPLEMENTED
