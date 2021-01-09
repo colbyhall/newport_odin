@@ -15,18 +15,16 @@ when ODIN_OS == "windows" {
     import "core:sys/win32"
 }
 
-Vulkan_Swapchain :: struct {
+Swapchain :: struct {
     handle : vk.SwapchainKHR,
 
     extent       : vk.Extent2D,
-    images       : []vk.Image,
-    views        : []vk.ImageView,
     framebuffers : []Framebuffer,
 
     render_pass : Render_Pass,
 }
 
-acquire_next_swapchain_framebuffer :: proc() -> ^Framebuffer {
+acquire_backbuffer :: proc() -> ^Framebuffer {
     using state := get(Vulkan_Graphics);
 
     image_index : u32;
@@ -49,11 +47,6 @@ Vulkan_Graphics :: struct {
 
     graphics_family_index  : u32,
     surface_family_index   : u32,
-
-    swapchain : Vulkan_Swapchain,
-
-    // command_pool    : vk.CommandPool,
-    // command_buffers : [2]vk.CommandBuffer,
 
     image_available_semaphore : vk.Semaphore,
     render_finished_semaphore : vk.Semaphore,
@@ -281,10 +274,10 @@ init_vulkan :: proc() {
         image_count : u32;
         vk.GetSwapchainImagesKHR(logical_gpu, handle, &image_count, nil);
 
-        images = make([]vk.Image, int(image_count));
+        images := make([]vk.Image, int(image_count), context.temp_allocator);
         vk.GetSwapchainImagesKHR(logical_gpu, handle, &image_count, &images[0]);
 
-        views = make([]vk.ImageView, int(image_count));
+        views := make([]vk.ImageView, int(image_count), context.temp_allocator);
 
         for _, i in images {
             component_mapping := vk.ComponentMapping{ .IDENTITY, .IDENTITY, .IDENTITY, .IDENTITY };
@@ -330,6 +323,10 @@ init_vulkan :: proc() {
             it.handle = handle;
             it.width  = int(extent.width);
             it.height = int(extent.height);
+            
+            it.attachments = make([]Framebuffer_Attachment, 1);
+            it.attachments[0].image = images[i];
+            it.attachments[0].view  = views[i];
         }
     }
 
@@ -730,6 +727,7 @@ make_command_allocator :: proc(type: Command_Allocator_Type) -> Command_Allocato
 
     create_info := vk.CommandPoolCreateInfo{
         sType            = .COMMAND_POOL_CREATE_INFO,
+        flags            = { .RESET_COMMAND_BUFFER },
         queueFamilyIndex = graphics_family_index,
     };
 
@@ -842,11 +840,17 @@ end_render_pass :: proc(buffer: Command_Buffer) {
     vk.CmdEndRenderPass(buffer.handle);
 }
 
-@(deferred_out=end_command_buffer)
-render_pass :: proc(buffer: Command_Buffer, render_pass: ^Render_Pass, framebuffer: ^Framebuffer) -> Command_Buffer {
+@(deferred_out=end_render_pass)
+render_pass_scope :: proc(buffer: Command_Buffer, render_pass: ^Render_Pass, framebuffer: ^Framebuffer) -> Command_Buffer {
     begin_render_pass(buffer, render_pass, framebuffer);
     return buffer;
 }
+
+bind_graphics_pipeline :: proc(buffer: Command_Buffer, pipeline: ^Graphics_Pipeline) {
+    vk.CmdBindPipeline(buffer.handle, .GRAPHICS, pipeline.handle);
+}
+
+bind_pipeline :: proc{ bind_graphics_pipeline };
 
 draw :: proc(buffer: Command_Buffer, auto_cast vertex_count: int, auto_cast first_vertex := 0) {
     vk.CmdDraw(buffer.handle, u32(vertex_count), 1, u32(first_vertex), 0);
@@ -863,12 +867,13 @@ submit_multiple :: proc(buffers: []Command_Buffer) {
         pWaitSemaphores      = &image_available_semaphore,
         pWaitDstStageMask    = &wait_stage,
         commandBufferCount   = u32(len(buffers)),
-        pCommandBuffers      = &buffers[0],
+        pCommandBuffers      = auto_cast &buffers[0],
         signalSemaphoreCount = 1,
         pSignalSemaphores    = &render_finished_semaphore,
     };
 
     vk.QueueSubmit(graphics_queue, 1, &submit_info, 0);
+    vk.QueueWaitIdle(graphics_queue);
 }
 
 submit_single :: proc(buffer: Command_Buffer) {
@@ -899,12 +904,18 @@ display :: proc(framebuffer: ^Framebuffer) {
     };
 
     vk.QueuePresentKHR(presentation_queue, &present_info);
-    vk.QueueWaitIdle(presentation_queue);
+    // vk.QueueWaitIdle(presentation_queue);
+}
+
+Framebuffer_Attachment :: struct {
+    image : vk.Image,
+    view  : vk.ImageView,
 }
 
 Framebuffer :: struct {
     handle        : vk.Framebuffer,
     width, height : int,
+    attachments   : []Framebuffer_Attachment,
 }
 
 // UNIMPLEMENTED

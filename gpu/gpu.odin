@@ -203,6 +203,7 @@ Command_Allocator_Type :: enum {
 //
 // @see Pipeline_Manager
 Graphics :: struct {
+    swapchain : Swapchain,
 }
 
 @private state : ^Graphics; // This is a ptr because the api may want to extend this in a child struct
