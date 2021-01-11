@@ -16,6 +16,7 @@ Rect    :: core.Rect;
 Linear_Color :: core.Linear_Color;
 
 v2 :: core.v2;
+rect_pos_size :: core.rect_pos_size;
 
 // All supported types of shaders
 Shader_Type :: enum {
@@ -170,8 +171,10 @@ Graphics_Pipeline_Description :: struct {
     depth_compare : Compare_Op,
 }
 
-default_graphics_pipeline_description :: proc() -> Graphics_Pipeline_Description {
+default_graphics_pipeline_description :: proc(render_pass: ^Render_Pass) -> Graphics_Pipeline_Description {
     return Graphics_Pipeline_Description{
+        render_pass = render_pass,
+        
         draw_mode  = .Fill,
         line_width = 1.0,
 

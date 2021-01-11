@@ -28,7 +28,11 @@ acquire_backbuffer :: proc() -> ^Framebuffer {
     using state := get(Vulkan_Graphics);
 
     image_index : u32;
-    vk.AcquireNextImageKHR(logical_gpu, swapchain.handle, (1 << 64 - 1), image_available_semaphore, 0, &image_index);
+    result := vk.AcquireNextImageKHR(logical_gpu, swapchain.handle, (1 << 64 - 1), image_available_semaphore, 0, &image_index);
+    if result == .ERROR_OUT_OF_DATE_KHR || result == .SUBOPTIMAL_KHR {
+        create_swap_chain();
+        vk.AcquireNextImageKHR(logical_gpu, swapchain.handle, (1 << 64 - 1), image_available_semaphore, 0, &image_index);
+    }
 
     return &swapchain.framebuffers[int(image_index)];
 }
@@ -223,113 +227,9 @@ init_vulkan :: proc() {
         vk.GetDeviceQueue(logical_gpu, surface_family_index, 0, &presentation_queue);
     }
 
-    // Create the swap chain
-    // TODO(colby): Abstract out into its own function for swap chain creation
+    // Create the swap chain for the first time
     {
-        capabilities : vk.SurfaceCapabilitiesKHR;
-        vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(physical_gpu, surface, &capabilities);
-
-        format_count : u32;
-        vk.GetPhysicalDeviceSurfaceFormatsKHR(physical_gpu, surface, &format_count, nil);
-
-        formats := make([]vk.SurfaceFormatKHR, int(format_count), context.temp_allocator);
-        vk.GetPhysicalDeviceSurfaceFormatsKHR(physical_gpu, surface, &format_count, &formats[0]);
-
-        format : ^vk.SurfaceFormatKHR;
-        for it in &formats {
-            if it.format == .B8G8R8A8_SRGB && it.colorSpace == .SRGB_NONLINEAR {
-                format = &it;
-                break;
-            }
-        }
-        assert(format != nil);
-
-        present_mode := vk.PresentModeKHR.FIFO;
-
-        create_info := vk.SwapchainCreateInfoKHR{
-            sType            = .SWAPCHAIN_CREATE_INFO_KHR,
-            surface          = surface,
-            minImageCount    = capabilities.minImageCount,
-            imageFormat      = format.format,
-            imageColorSpace  = format.colorSpace,
-            imageExtent      = capabilities.currentExtent,
-            imageArrayLayers = 1,
-            imageUsage       = { .COLOR_ATTACHMENT },
-            imageSharingMode = .CONCURRENT,
-
-            queueFamilyIndexCount = u32(len(queue_family_indices)),
-            pQueueFamilyIndices   = &queue_family_indices[0],
-
-            preTransform     = capabilities.currentTransform,
-            compositeAlpha   = { .OPAQUE },
-            presentMode      = present_mode,
-            clipped          = true,
-        };
-
-        using swapchain;
-
-        extent = capabilities.currentExtent;
-
-        result := vk.CreateSwapchainKHR(logical_gpu, &create_info, nil, &handle);
-        assert(result == .SUCCESS);
-
-        image_count : u32;
-        vk.GetSwapchainImagesKHR(logical_gpu, handle, &image_count, nil);
-
-        images := make([]vk.Image, int(image_count), context.temp_allocator);
-        vk.GetSwapchainImagesKHR(logical_gpu, handle, &image_count, &images[0]);
-
-        views := make([]vk.ImageView, int(image_count), context.temp_allocator);
-
-        for _, i in images {
-            component_mapping := vk.ComponentMapping{ .IDENTITY, .IDENTITY, .IDENTITY, .IDENTITY };
-
-            subresource_range := vk.ImageSubresourceRange{
-                aspectMask = { .COLOR },
-                levelCount = 1,
-                layerCount = 1,
-            };
-
-            create_info := vk.ImageViewCreateInfo{
-                sType       = .IMAGE_VIEW_CREATE_INFO,
-                image       = images[i],
-                viewType    = .D2,
-                format      = .B8G8R8A8_SRGB,
-                components  = component_mapping,
-                subresourceRange = subresource_range,
-            };
-
-            result := vk.CreateImageView(logical_gpu, &create_info, nil, &views[i]);
-            assert(result == .SUCCESS);
-        }
-
-        render_pass = make_render_pass();
-
-        framebuffers = make([]Framebuffer, int(image_count));
-
-        for it, i in &framebuffers {
-            create_info := vk.FramebufferCreateInfo{
-                sType           = .FRAMEBUFFER_CREATE_INFO,
-                renderPass      = render_pass.handle,
-                attachmentCount = 1,
-                pAttachments    = &views[i],
-                width           = extent.width,
-                height          = extent.height,
-                layers          = 1,
-            };
-
-            handle : vk.Framebuffer;
-            result := vk.CreateFramebuffer(logical_gpu, &create_info, nil, &handle);
-            assert(result == .SUCCESS);
-
-            it.handle = handle;
-            it.width  = int(extent.width);
-            it.height = int(extent.height);
-            
-            it.attachments = make([]Framebuffer_Attachment, 1);
-            it.attachments[0].image = images[i];
-            it.attachments[0].view  = views[i];
-        }
+       create_swap_chain();
     }
 
     // Create semaphores
@@ -346,103 +246,140 @@ init_vulkan :: proc() {
     }
 }
 
-/*
-fill_command_buffer :: proc(pipeline: ^Graphics_Pipeline) {
+@private 
+create_swap_chain :: proc() {
     using state := get(Vulkan_Graphics);
 
-    // Create the command buffers and fill them
-    {
-        pool_create_info := vk.CommandPoolCreateInfo{
-            sType            = .COMMAND_POOL_CREATE_INFO,
-            queueFamilyIndex = graphics_family_index,
-        };
+    // Check if there is a valid swapchain and if so delete it
+    if swapchain.handle != 0 {
+        using swapchain;
 
-        result := vk.CreateCommandPool(logical_gpu, &pool_create_info, nil, &command_pool);
-        assert(result == .SUCCESS);
+        for it, i in framebuffers {
+            vk.DestroyFramebuffer(logical_gpu, it.handle, nil);
 
-        alloc_info := vk.CommandBufferAllocateInfo{
-            sType               = .COMMAND_BUFFER_ALLOCATE_INFO,
-            commandPool         = command_pool,
-            level               = .PRIMARY,
-            commandBufferCount  = u32(len(command_buffers)),
-        };
-
-        result = vk.AllocateCommandBuffers(logical_gpu, &alloc_info, &command_buffers[0]);
-        assert(result == .SUCCESS);
-
-        for it, i in &command_buffers {
-            begin_info := vk.CommandBufferBeginInfo{
-                sType = .COMMAND_BUFFER_BEGIN_INFO,
-                flags = { .SIMULTANEOUS_USE },
-            };
-
-            result = vk.BeginCommandBuffer(it, &begin_info);
-            assert(result == .SUCCESS);
-
-            // Start a render pass
-            {
-                render_area := vk.Rect2D{ extent = swapchain.extent };
-                clear_color : vk.ClearValue;
-                clear_color.color.float32 = { 0, 0, 0, 1 };
-
-                begin_info := vk.RenderPassBeginInfo{
-                    sType           = .RENDER_PASS_BEGIN_INFO,
-                    renderPass      = swapchain.render_pass.handle,
-                    framebuffer     = swapchain.framebuffers[i],
-                    renderArea      = render_area,
-                    clearValueCount = 1,
-                    pClearValues    = &clear_color,
-                };
-
-                vk.CmdBeginRenderPass(it, &begin_info, .INLINE);
+            for att in it.attachments {
+                vk.DestroyImageView(logical_gpu, att.view, nil);
             }
+            delete(it.attachments);
+        }
 
-            vk.CmdBindPipeline(it, .GRAPHICS, pipeline.handle);
+        delete(framebuffers);
 
-            vk.CmdDraw(it, 3, 1, 0, 0);
+        vk.DestroyRenderPass(logical_gpu, render_pass.handle, nil);
 
-            vk.CmdEndRenderPass(it);
+        vk.DestroySwapchainKHR(logical_gpu, handle, nil);
+    }
 
-            result = vk.EndCommandBuffer(it);
-            assert(result == .SUCCESS);
+    capabilities : vk.SurfaceCapabilitiesKHR;
+    vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(physical_gpu, surface, &capabilities);
+
+    format_count : u32;
+    vk.GetPhysicalDeviceSurfaceFormatsKHR(physical_gpu, surface, &format_count, nil);
+
+    formats := make([]vk.SurfaceFormatKHR, int(format_count), context.temp_allocator);
+    vk.GetPhysicalDeviceSurfaceFormatsKHR(physical_gpu, surface, &format_count, &formats[0]);
+
+    format : ^vk.SurfaceFormatKHR;
+    for it in &formats {
+        if it.format == .B8G8R8A8_SRGB && it.colorSpace == .SRGB_NONLINEAR {
+            format = &it;
+            break;
         }
     }
-}
+    assert(format != nil);
 
-do_draw :: proc() {
-    using state := get(Vulkan_Graphics);
+    present_mode := vk.PresentModeKHR.FIFO;
 
-    image_index : u32;
-    vk.AcquireNextImageKHR(logical_gpu, swapchain.handle, (1 << 64 - 1), image_available_semaphore, 0, &image_index);
-
-    wait_stage : vk.PipelineStageFlags = { .COLOR_ATTACHMENT_OUTPUT };
-
-    submit_info := vk.SubmitInfo{
-        sType                = .SUBMIT_INFO,
-        waitSemaphoreCount   = 1,
-        pWaitSemaphores      = &image_available_semaphore,
-        pWaitDstStageMask    = &wait_stage,
-        commandBufferCount   = 1,
-        pCommandBuffers      = &command_buffers[int(image_index)],
-        signalSemaphoreCount = 1,
-        pSignalSemaphores    = &render_finished_semaphore,
+    queue_family_indices := [?]u32{
+        graphics_family_index,
+        surface_family_index,
     };
 
-    vk.QueueSubmit(graphics_queue, 1, &submit_info, 0);
+    create_info := vk.SwapchainCreateInfoKHR{
+        sType            = .SWAPCHAIN_CREATE_INFO_KHR,
+        surface          = surface,
+        minImageCount    = capabilities.minImageCount,
+        imageFormat      = format.format,
+        imageColorSpace  = format.colorSpace,
+        imageExtent      = capabilities.currentExtent,
+        imageArrayLayers = 1,
+        imageUsage       = { .COLOR_ATTACHMENT },
+        imageSharingMode = .CONCURRENT,
 
-    present_info := vk.PresentInfoKHR{
-        sType               = .PRESENT_INFO_KHR,
-        waitSemaphoreCount  = 1,
-        pWaitSemaphores     = &render_finished_semaphore,
-        swapchainCount      = 1,
-        pSwapchains         = &swapchain.handle,
-        pImageIndices       = &image_index,
+        queueFamilyIndexCount = u32(len(queue_family_indices)),
+        pQueueFamilyIndices   = &queue_family_indices[0],
+
+        preTransform     = capabilities.currentTransform,
+        compositeAlpha   = { .OPAQUE },
+        presentMode      = present_mode,
+        clipped          = true,
     };
 
-    vk.QueuePresentKHR(presentation_queue, &present_info);
-    vk.QueueWaitIdle(presentation_queue);
+    using swapchain;
+
+    extent = capabilities.currentExtent;
+
+    result := vk.CreateSwapchainKHR(logical_gpu, &create_info, nil, &handle);
+    assert(result == .SUCCESS);
+
+    image_count : u32;
+    vk.GetSwapchainImagesKHR(logical_gpu, handle, &image_count, nil);
+
+    images := make([]vk.Image, int(image_count), context.temp_allocator);
+    vk.GetSwapchainImagesKHR(logical_gpu, handle, &image_count, &images[0]);
+
+    views := make([]vk.ImageView, int(image_count), context.temp_allocator);
+
+    for _, i in images {
+        component_mapping := vk.ComponentMapping{ .IDENTITY, .IDENTITY, .IDENTITY, .IDENTITY };
+
+        subresource_range := vk.ImageSubresourceRange{
+            aspectMask = { .COLOR },
+            levelCount = 1,
+            layerCount = 1,
+        };
+
+        create_info := vk.ImageViewCreateInfo{
+            sType       = .IMAGE_VIEW_CREATE_INFO,
+            image       = images[i],
+            viewType    = .D2,
+            format      = .B8G8R8A8_SRGB,
+            components  = component_mapping,
+            subresourceRange = subresource_range,
+        };
+
+        result := vk.CreateImageView(logical_gpu, &create_info, nil, &views[i]);
+        assert(result == .SUCCESS);
+    }
+
+    render_pass = make_render_pass();
+
+    framebuffers = make([]Framebuffer, int(image_count));
+
+    for it, i in &framebuffers {
+        create_info := vk.FramebufferCreateInfo{
+            sType           = .FRAMEBUFFER_CREATE_INFO,
+            renderPass      = render_pass.handle,
+            attachmentCount = 1,
+            pAttachments    = &views[i],
+            width           = extent.width,
+            height          = extent.height,
+            layers          = 1,
+        };
+
+        handle : vk.Framebuffer;
+        result := vk.CreateFramebuffer(logical_gpu, &create_info, nil, &handle);
+        assert(result == .SUCCESS);
+
+        it.handle = handle;
+        it.width  = int(extent.width);
+        it.height = int(extent.height);
+        
+        it.attachments = make([]Framebuffer_Attachment, 1);
+        it.attachments[0].image = images[i];
+        it.attachments[0].view  = views[i];
+    }
 }
-*/
 
 Render_Pass :: struct {
     handle : vk.RenderPass,
@@ -672,7 +609,6 @@ make_graphics_pipeline :: proc(using description: Graphics_Pipeline_Description,
     dynamic_states := [?]vk.DynamicState {
         .VIEWPORT,
         .SCISSOR,
-        .LINE_WIDTH,
     };
 
     dynamic_state := vk.PipelineDynamicStateCreateInfo{
@@ -700,7 +636,7 @@ make_graphics_pipeline :: proc(using description: Graphics_Pipeline_Description,
         pRasterizationState = &rasterizer_state,
         pMultisampleState   = &multisample_state,
         pColorBlendState    = &color_blend_state,
-        // pDynamicState       = &dynamic_state,
+        pDynamicState       = &dynamic_state,
         layout              = layout,
         renderPass          = render_pass.handle,
         subpass             = u32(subpass_index),
@@ -788,18 +724,16 @@ make_command_buffers :: proc(alloc: Command_Allocator, len: int, slice_allocator
 
 make_command_buffer :: proc{ make_command_buffer_single, make_command_buffers };
 
-reset_command_buffer :: proc(buffer: Command_Buffer) {
+begin_command_buffer :: proc(buffer: Command_Buffer) {
     result := vk.ResetCommandBuffer(buffer.handle, {});
     assert(result == .SUCCESS);
-}
 
-begin_command_buffer :: proc(buffer: Command_Buffer) {
     begin_info := vk.CommandBufferBeginInfo{
         sType = .COMMAND_BUFFER_BEGIN_INFO,
         flags = { .SIMULTANEOUS_USE },
     };
 
-    result := vk.BeginCommandBuffer(buffer.handle, &begin_info);
+    result = vk.BeginCommandBuffer(buffer.handle, &begin_info);
     assert(result == .SUCCESS);
 }
 
@@ -848,8 +782,33 @@ render_pass_scope :: proc(buffer: Command_Buffer, render_pass: ^Render_Pass, fra
     return buffer;
 }
 
-bind_graphics_pipeline :: proc(buffer: Command_Buffer, pipeline: ^Graphics_Pipeline) {
+// TODO(colby): Look into if we can use the current render pass's attachment info
+bind_graphics_pipeline :: proc(buffer: Command_Buffer, pipeline: ^Graphics_Pipeline, viewport: Vector2, scissor: Maybe(Rect) = nil) {
     vk.CmdBindPipeline(buffer.handle, .GRAPHICS, pipeline.handle);
+
+    vk_viewport := vk.Viewport{
+        width    = viewport.x,
+        height   = viewport.y,
+        maxDepth = 1,
+    };
+    vk.CmdSetViewport(buffer.handle, 0, 1, &vk_viewport);
+    if scissor == nil {
+        rect : vk.Rect2D;
+        rect.extent.width = u32(viewport.x);
+        rect.extent.height = u32(viewport.y);
+        vk.CmdSetScissor(buffer.handle, 0, 1, &rect);
+    } else {
+        scissor := scissor.(Rect);
+
+        _, size := rect_pos_size(scissor);
+
+        rect : vk.Rect2D;
+        rect.offset.x = i32(scissor.min.x);
+        rect.offset.y = i32(scissor.min.y);
+        rect.extent.width  = u32(size.x);
+        rect.extent.height = u32(size.y);
+        vk.CmdSetScissor(buffer.handle, 0, 1, &rect);
+    }
 }
 
 bind_pipeline :: proc{ bind_graphics_pipeline };
@@ -905,7 +864,9 @@ display :: proc(framebuffer: ^Framebuffer) {
         pImageIndices       = &image_index,
     };
 
-    vk.QueuePresentKHR(presentation_queue, &present_info);
+    result := vk.QueuePresentKHR(presentation_queue, &present_info);
+    if result == .ERROR_OUT_OF_DATE_KHR || result == .SUBOPTIMAL_KHR do create_swap_chain();
+
     vk.QueueWaitIdle(presentation_queue);
 }
 
