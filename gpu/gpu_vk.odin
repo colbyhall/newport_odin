@@ -48,6 +48,8 @@ Vulkan_Graphics :: struct {
     graphics_family_index  : u32,
     surface_family_index   : u32,
 
+    // Unused
+    // TODO(colby): Figure out how we want to submit work using fibers
     image_available_semaphore : vk.Semaphore,
     render_finished_semaphore : vk.Semaphore,
 }
@@ -868,8 +870,8 @@ submit_multiple :: proc(buffers: []Command_Buffer) {
         pWaitDstStageMask    = &wait_stage,
         commandBufferCount   = u32(len(buffers)),
         pCommandBuffers      = auto_cast &buffers[0],
-        signalSemaphoreCount = 1,
-        pSignalSemaphores    = &render_finished_semaphore,
+        // signalSemaphoreCount = 1,
+        // pSignalSemaphores    = &render_finished_semaphore,
     };
 
     vk.QueueSubmit(graphics_queue, 1, &submit_info, 0);
@@ -896,15 +898,15 @@ display :: proc(framebuffer: ^Framebuffer) {
 
     present_info := vk.PresentInfoKHR{
         sType               = .PRESENT_INFO_KHR,
-        waitSemaphoreCount  = 1,
-        pWaitSemaphores     = &render_finished_semaphore,
+        // waitSemaphoreCount  = 1,
+        // pWaitSemaphores     = &render_finished_semaphore,
         swapchainCount      = 1,
         pSwapchains         = &swapchain.handle,
         pImageIndices       = &image_index,
     };
 
     vk.QueuePresentKHR(presentation_queue, &present_info);
-    // vk.QueueWaitIdle(presentation_queue);
+    vk.QueueWaitIdle(presentation_queue);
 }
 
 Framebuffer_Attachment :: struct {
