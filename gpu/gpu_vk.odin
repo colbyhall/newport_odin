@@ -4,6 +4,7 @@ import "core:mem"
 import "core:dynlib"
 import "core:runtime"
 import "core:log"
+import "core:reflect"
 
 import "core:fmt" // temp
 
@@ -270,6 +271,9 @@ create_swap_chain :: proc() {
         vk.DestroySwapchainKHR(logical_gpu, handle, nil);
     }
 
+    // TODO(colby): This should really be checking if the windows is not showing. Whether that is minimized or destroyed
+    if !engine.is_running() do return;
+
     capabilities : vk.SurfaceCapabilitiesKHR;
     vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(physical_gpu, surface, &capabilities);
 
@@ -498,9 +502,48 @@ make_graphics_pipeline :: proc(using description: Graphics_Pipeline_Description,
         shader_stages[i] = stage_info;
     }
 
-    // TODO(colby): Setup the vertex attributes
+    // Do the vertex input stuff
+    binding := vk.VertexInputBindingDescription{
+        binding   = 0,
+        stride    = u32(reflect.size_of_typeid(description.vertex)),
+        inputRate = .VERTEX,
+    };
+
+    attributes := make([dynamic]vk.VertexInputAttributeDescription, 0, 12, context.temp_allocator);
+    {
+        using reflect;
+
+        vertex_type_info := type_info_base(type_info_of(description.vertex));
+        vertex_struct_info, ok := vertex_type_info.variant.(Type_Info_Struct);
+        assert(ok); // Vertex must be a struct
+
+        for it, i in vertex_struct_info.types {
+            desc := vk.VertexInputAttributeDescription{
+                binding  = 0,
+                location = u32(i),
+                offset   = u32(vertex_struct_info.offsets[i]),
+            };
+
+            switch it.id {
+            case i32:           desc.format = .R32_SINT;
+            case f32:           desc.format = .R32_SFLOAT;
+            case Vector2:       desc.format = .R32G32_SFLOAT;
+            case Vector3:       desc.format = .R32G32B32_SFLOAT;
+            case Vector4:       desc.format = .R32G32B32A32_SFLOAT;
+            case Linear_Color:  desc.format = .R32G32B32A32_SFLOAT;
+            case:               assert(false);
+            }
+
+            append(&attributes, desc);
+        }
+    }
+
     vertex_input_state := vk.PipelineVertexInputStateCreateInfo{
-        sType = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        sType                           = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        vertexBindingDescriptionCount   = 1,
+        pVertexBindingDescriptions      = &binding,
+        vertexAttributeDescriptionCount = u32(len(attributes)),
+        pVertexAttributeDescriptions    = &attributes[0],
     };  
 
     input_assembly_state := vk.PipelineInputAssemblyStateCreateInfo{
@@ -714,7 +757,7 @@ make_command_buffers :: proc(alloc: Command_Allocator, len: int, slice_allocator
         commandBufferCount  = u32(len),
     };
 
-    // HACK(colby): Doing this to prevent multiple allocation. This will break is more members are added to Command_Buffer
+    // HACK(colby): Doing this to prevent multiple allocation. This will break as more members are added to Command_Buffer
     results := make([]Command_Buffer, len, slice_allocator);
     result := vk.AllocateCommandBuffers(logical_gpu, &alloc_info, &results[0].handle);
     assert(result == .SUCCESS);
@@ -813,6 +856,13 @@ bind_graphics_pipeline :: proc(buffer: Command_Buffer, pipeline: ^Graphics_Pipel
 
 bind_pipeline :: proc{ bind_graphics_pipeline };
 
+bind_vertex_buffer :: proc(buffer: Command_Buffer, vb: Vertex_Buffer) {
+    vb := vb;
+
+    offset : vk.DeviceSize;
+    vk.CmdBindVertexBuffers(buffer.handle, 0, 1, &vb.staging.handle, &offset);
+}
+
 draw :: proc(buffer: Command_Buffer, auto_cast vertex_count: int, auto_cast first_vertex := 0) {
     vk.CmdDraw(buffer.handle, u32(vertex_count), 1, u32(first_vertex), 0);
 }
@@ -868,6 +918,94 @@ display :: proc(framebuffer: ^Framebuffer) {
     if result == .ERROR_OUT_OF_DATE_KHR || result == .SUBOPTIMAL_KHR do create_swap_chain();
 
     vk.QueueWaitIdle(presentation_queue);
+}
+
+Buffer :: struct {
+    handle : vk.Buffer,
+    memory : vk.DeviceMemory,
+}
+
+@private
+make_buffer :: proc(usage: vk.BufferUsageFlags, properties: vk.MemoryPropertyFlags, size: int) -> Buffer {
+    using state := get(Vulkan_Graphics);
+
+    create_info := vk.BufferCreateInfo{
+        sType       = .BUFFER_CREATE_INFO,
+        size        = vk.DeviceSize(size),
+        usage       = usage,
+        sharingMode = .EXCLUSIVE, // TODO(colby): Look into this more
+    };
+
+    handle : vk.Buffer;
+    result := vk.CreateBuffer(logical_gpu, &create_info, nil, &handle);
+    assert(result == .SUCCESS);
+
+    mem_requirements : vk.MemoryRequirements;
+    vk.GetBufferMemoryRequirements(logical_gpu, handle, &mem_requirements);
+
+    mem_properties : vk.PhysicalDeviceMemoryProperties;
+    vk.GetPhysicalDeviceMemoryProperties(physical_gpu, &mem_properties);
+
+    index := -1;
+    for i : u32 = 0; i < mem_properties.memoryTypeCount; i += 1 {
+        can_use := bool(mem_requirements.memoryTypeBits & (1 << i));
+        can_use &= mem_properties.memoryTypes[i].propertyFlags & properties != {};
+
+        if can_use {
+            index = int(i);
+            break;
+        }
+    }
+    assert(index != -1);
+
+    alloc_info := vk.MemoryAllocateInfo{
+        sType           = .MEMORY_ALLOCATE_INFO,
+        allocationSize  = mem_requirements.size,
+        memoryTypeIndex = u32(index),
+    };
+
+    memory : vk.DeviceMemory;
+    result = vk.AllocateMemory(logical_gpu, &alloc_info, nil, &memory);
+    assert(result == .SUCCESS);
+
+    vk.BindBufferMemory(logical_gpu, handle, memory, 0);
+
+    return Buffer{ handle = handle, memory = memory };
+}
+
+@private
+delete_buffer :: proc(using b: ^Buffer) {
+    using state := get(Vulkan_Graphics);
+
+    vk.DestroyBuffer(logical_gpu, handle, nil);
+    vk.FreeMemory(logical_gpu, memory, nil);
+
+    handle = 0;
+    memory = 0;
+}
+
+Vertex_Buffer :: struct {
+    actual  : Buffer,
+    staging : Buffer,
+}
+
+make_vertex_buffer :: proc(vertices : []$E) -> Vertex_Buffer {
+    using state := get(Vulkan_Graphics);
+
+    size := len(vertices) * size_of(E);
+    result := make_buffer({ .VERTEX_BUFFER }, { .HOST_VISIBLE, .HOST_COHERENT }, size);
+
+    // TEMP TEMP TEMP
+    data : rawptr;
+    vk.MapMemory(logical_gpu, result.memory, 0, vk.DeviceSize(size), {}, &data);
+    mem.copy(data, &vertices[0], size);
+    vk.UnmapMemory(logical_gpu, result.memory);
+
+    return Vertex_Buffer{ staging = result };
+}
+
+delete_vertex_buffer :: proc(using vb: ^Vertex_Buffer) {
+    delete_buffer(&staging);
 }
 
 Framebuffer_Attachment :: struct {
