@@ -11,6 +11,16 @@ Asset :: struct {
     derived : any,
 }
 
+Test_Asset :: struct {
+    using _ : Asset,
+
+    foo : int, 
+    bar : f32,
+    
+    boop : string,
+    other : ^Test_Asset,
+}
+
 Register :: #type proc(path: string) -> ^Asset;
 Load     :: #type proc(using asset: ^Asset) -> bool;
 Unload   :: #type proc(using asset: ^Asset) -> bool;
@@ -30,7 +40,15 @@ Manager :: struct {
     registers : [dynamic]Type_Register,
 }
 
-@private manager : Manager;
+@private manager : ^Manager;
+
+init :: proc() {
+    manager = new(Manager);
+
+    extensions := make([]string, 1);
+    extensions[0] = "test"
+    register(Test_Asset, extensions);
+}
 
 register_auto :: proc($T: typeid, extensions: []string) {
     register_proc :: proc(path: string) -> ^Asset {
@@ -73,3 +91,7 @@ register_explicit :: proc($T: typeid, extensions: []string, load: Load, unload: 
 }
 
 register :: proc{ register_auto, register_explicit };
+
+discover :: proc() {
+    
+}
