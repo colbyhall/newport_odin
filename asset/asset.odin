@@ -151,7 +151,8 @@ load_from_json :: proc(asset: ^$T) -> bool {
         return false;
     }
 
-    log_json_error :: proc(val: json.Value, err: json.Error, path: string) {
+    val, err := json.parse(source, .JSON5, true);
+    if err != .None {
         errors_string := [len(json.Error)]string{
             "none",
             "eof",
@@ -167,17 +168,161 @@ load_from_json :: proc(asset: ^$T) -> bool {
             "expected colon after key"
         };
 
-        log.errorf("[Asset] Error \"{}\" in {} at line {} column {}", errors_string[err], path, val.pos.line, val.pos.column);
-    }
-
-    val, err := json.parse(source, .JSON5, true);
-    if err != .None {
-        log_json_error(val, err, asset.path);
+        log.errorf("[Asset] Error \"{}\" in {} at line {} column {}", errors_string[err], asset.path, val.pos.line, val.pos.column);
         return false;
     }
     defer json.destroy_value(val);
 
-    log.warn(val.value);
+    Member :: struct {
+        type     : ^reflect.Type_Info,
+        offset   : uintptr,
+    };
+
+    members := make(map[string]Member);
+    defer delete(members);
+
+    // Fill members info
+    {
+        using reflect;
+
+        type_info := type_info_base(type_info_of(T));
+        struct_info, ok := type_info.variant.(Type_Info_Struct);
+        assert(ok); // asset should obviously be a struct
+
+        recursive_fill_member :: proc(members: ^map[string]Member, struct_info: ^reflect.Type_Info_Struct) {
+            for name, i in struct_info.names {
+                base_type_info := type_info_base(struct_info.types[i]);
+
+                if struct_info.usings[i] {
+                    new_struct_info, ok := base_type_info.variant.(Type_Info_Struct);
+                    assert(ok);
+                    recursive_fill_member(members, &new_struct_info);
+                    continue;
+                }
+
+                member := Member{
+                    type   = base_type_info,
+                    offset = struct_info.offsets[i],
+                };
+                (members^)[name] = member;
+            }
+        }
+
+        recursive_fill_member(&members, &struct_info);
+    }
+
+    // TODO: Make this recursive so we can have nested structures to fill
+    #partial switch v in val.value {
+    case json.Object:
+        using reflect;
+
+        for key, val in v {
+            member, found := members[key];
+            if !found {
+                log.warnf("[Asset] Unknown member \"{}\" in {}", key, asset.path);
+                continue;
+            }
+
+            value_ptr := uintptr(asset) + member.offset;
+
+            #partial switch v in member.type.variant {
+            case Type_Info_Integer:
+                result, ok := val.value.(json.Integer);
+                if !ok {
+                    log.errorf("[Asset] Error \"Incorrect type. Type should be an integer\" in {} at line {} column {}", asset.path, val.pos.line, val.pos.column);
+                    continue;
+                }
+
+                if v.signed {
+                    switch member.type.id {
+                    case i8:
+                        x := cast(^i8)value_ptr;
+                        x^ = cast(i8)result;
+                    case i16:
+                        x := cast(^i16)value_ptr;
+                        x^ = cast(i16)result;
+                    case i32:
+                        x := cast(^i32)value_ptr;
+                        x^ = cast(i32)result;
+                    case i64, int:
+                        x := cast(^i64)value_ptr;
+                        x^ = result;
+                    } 
+                } else {
+                    switch member.type.id {
+                    case u8:
+                        x := cast(^u8)value_ptr;
+                        x^ = cast(u8)result;
+                    case u16:
+                        x := cast(^u16)value_ptr;
+                        x^ = cast(u16)result;
+                    case u32:
+                        x := cast(^u32)value_ptr;
+                        x^ = cast(u32)result;
+                    case u64, uint:
+                        x := cast(^u64)value_ptr;
+                        x^ = cast(u64)result;
+                    } 
+                }
+            case Type_Info_Float:
+                result, ok := val.value.(json.Float);
+                if !ok {
+                    log.errorf("[Asset] Error \"Incorrect type. Type should be a float\" in {} at line {} column {}", asset.path, val.pos.line, val.pos.column);
+                    continue;
+                }
+
+                switch member.type.id {
+                case f32:
+                    x := cast(^f32)value_ptr;
+                    x^ = cast(f32)result;
+                case f64:
+                    x := cast(^f64)value_ptr;
+                    x^ = result;
+                }
+            case Type_Info_String:
+                result, ok := val.value.(json.String);
+                if !ok {
+                    log.errorf("[Asset] Error \"Incorrect type. Type should be a string\" in {} at line {} column {}", asset.path, val.pos.line, val.pos.column);
+                    continue;
+                }
+
+                x := cast(^string)value_ptr;
+                x^ = strings.clone(result);
+
+            case Type_Info_Pointer:
+                elem := type_info_base(v.elem);
+
+                _, ok0 := elem.variant.(Type_Info_Struct);
+                if !ok0 {
+                    log.errorf("[Asset] Error \"Value for member with non asset ptr\" in {} at line {} column {} of member {}", asset.path, val.pos.line, val.pos.column, key);
+                    continue;   
+                }
+
+                result, ok1 := val.value.(json.String);
+                if !ok1 {
+                    log.errorf("[Asset] Error \"Incorrect type. Type should be a string\" in {} at line {} column {}", asset.path, val.pos.line, val.pos.column);
+                    continue;
+                }
+
+                found_asset := find(result);
+                if found_asset == nil {
+                    log.errorf("[Asset] Error \"Invalid path for asset ptr\" in {} at line {} column {}", asset.path, val.pos.line, val.pos.column);
+                    continue;
+                }
+
+                x := cast(^rawptr)value_ptr;
+                data, _ := any_data(found_asset.derived);
+                x^ = data;
+            case: 
+                log.errorf("[Asset] Incomplete implementation. Cannot unmarshal type \"{}\" for member \"{}\" in {}", member.type.id, key, asset.path);
+                continue;
+            }
+        }
+    case:
+        log.errorf("[Asset] Error \"initial type must be object\" in {}", asset.path);
+        return false;
+    }
+
     return true;
 }
 

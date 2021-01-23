@@ -513,15 +513,15 @@ make_graphics_pipeline :: proc(using description: Graphics_Pipeline_Description,
     {
         using reflect;
 
-        vertex_type_info := type_info_base(type_info_of(description.vertex));
-        vertex_struct_info, ok := vertex_type_info.variant.(Type_Info_Struct);
+        type_info := type_info_base(type_info_of(description.vertex));
+        struct_info, ok := type_info.variant.(Type_Info_Struct);
         assert(ok); // Vertex must be a struct
 
-        for it, i in vertex_struct_info.types {
+        for it, i in struct_info.types {
             desc := vk.VertexInputAttributeDescription{
                 binding  = 0,
                 location = u32(i),
-                offset   = u32(vertex_struct_info.offsets[i]),
+                offset   = u32(struct_info.offsets[i]),
             };
 
             switch it.id {
