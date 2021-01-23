@@ -27,6 +27,11 @@ Asset :: struct {
 Test :: struct {
     using _ : Asset,
 
+    using _ : struct {
+        testing123: string,
+        mymy: f32,
+    },
+
     foo : int, 
     bar : f32,
     
@@ -348,9 +353,11 @@ load_from_json :: proc(asset: ^$T) -> bool {
             type     : ^reflect.Type_Info,
             offset   : uintptr,
         };
+
         // We need an easy way to access all members of T's struct. This includes the 
-        // structures inside a 'using' struct. We dont want to force the json object
-        // to members to be in the same order as T's 
+        // members inside a 'using' struct. We dont want to force the json object to
+        // members to be in the same order as T's 
+        // - CHall 1/21/2021
         members := make(map[string]Member);
         defer delete(members);
         {
@@ -359,26 +366,28 @@ load_from_json :: proc(asset: ^$T) -> bool {
             struct_info, ok := type_info.variant.(Type_Info_Struct);
             assert(ok); // asset should obviously be a struct
 
-            recursive_fill_members :: proc(members: ^map[string]Member, struct_info: ^reflect.Type_Info_Struct) {
+            recursive_fill_members :: proc(members: ^map[string]Member, struct_info: ^reflect.Type_Info_Struct, offset: uintptr) {
                 for name, i in struct_info.names {
                     base_type_info := type_info_base(struct_info.types[i]);
+
+                    offset := offset + struct_info.offsets[i];
 
                     if struct_info.usings[i] {
                         new_struct_info, ok := base_type_info.variant.(Type_Info_Struct);
                         assert(ok);
-                        recursive_fill_members(members, &new_struct_info);
+                        recursive_fill_members(members, &new_struct_info, offset);
                         continue;
                     }
 
                     member := Member{
                         type   = base_type_info,
-                        offset = struct_info.offsets[i],
+                        offset = offset,
                     };
                     (members^)[name] = member;
                 }
             }
 
-            recursive_fill_members(&members, &struct_info);
+            recursive_fill_members(&members, &struct_info, 0);
         }
 
         obj, ok := val.value.(json.Object);
@@ -395,8 +404,7 @@ load_from_json :: proc(asset: ^$T) -> bool {
             }
 
             value_ptr := uintptr(base) + member.offset;
-            ok := unmarshal_value(rawptr(value_ptr), member.type, path, value);
-            if !ok do return false;
+            unmarshal_value(rawptr(value_ptr), member.type, path, value);
         }
 
         return true;
