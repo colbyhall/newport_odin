@@ -10,6 +10,7 @@ import "core:slice"
 import "core:log"
 import "core:encoding/json"
 import "core:sync"
+import "core:runtime"
 
 ASSETS_PATH :: "assets";
 
@@ -31,6 +32,10 @@ Test :: struct {
     
     boop : string,
     other : ^Test,
+
+    array : [3]string,
+    dynamic_array : [dynamic]int,
+    slice : []f32,
 }
 
 Register :: #type proc(path: string) -> ^Asset;
@@ -152,176 +157,259 @@ load_from_json :: proc(asset: ^$T) -> bool {
     }
 
     val, err := json.parse(source, .JSON5, true);
+    defer json.destroy_value(val);
+
+    log_error_json :: proc(error, path: string, value: json.Value) {
+        log.errorf("[Asset] {}. In \"{}\" at line {} column {}", error, path, value.pos.line, value.pos.column);
+    }
+
+    // Do JSON error checking
     if err != .None {
         errors_string := [len(json.Error)]string{
             "none",
             "eof",
 
-            "illegal character",
-            "invalid number",
-            "string not terminated",
-            "invalid string",
+            "Illegal character",
+            "Invalid number",
+            "String not terminated",
+            "Invalid string",
 
-            "unexpected token",
-            "expected string for object key",
-            "duplicate object key",
-            "expected colon after key"
+            "Unexpected token",
+            "Expected string for object key",
+            "Duplicate object key",
+            "Expected colon after key"
         };
 
-        log.errorf("[Asset] Error \"{}\" in {} at line {} column {}", errors_string[err], asset.path, val.pos.line, val.pos.column);
+        log_error_json(errors_string[err], asset.path, val);
         return false;
     }
-    defer json.destroy_value(val);
 
-    Member :: struct {
-        type     : ^reflect.Type_Info,
-        offset   : uintptr,
-    };
-
-    members := make(map[string]Member);
-    defer delete(members);
-
-    // Fill members info
-    {
+    unmarshal_value :: proc(value_ptr: rawptr, type_info: ^reflect.Type_Info, path: string, val: json.Value) -> bool {
         using reflect;
 
-        type_info := type_info_base(type_info_of(T));
-        struct_info, ok := type_info.variant.(Type_Info_Struct);
-        assert(ok); // asset should obviously be a struct
+        #partial switch v in type_info.variant {
+        case Type_Info_Integer:
+            result, ok := val.value.(json.Integer);
+            if !ok {
+                log_error_json("Incorrect Type. Type should be an integer", path, val);
+                return false;
+            }
 
-        recursive_fill_member :: proc(members: ^map[string]Member, struct_info: ^reflect.Type_Info_Struct) {
-            for name, i in struct_info.names {
-                base_type_info := type_info_base(struct_info.types[i]);
-
-                if struct_info.usings[i] {
-                    new_struct_info, ok := base_type_info.variant.(Type_Info_Struct);
-                    assert(ok);
-                    recursive_fill_member(members, &new_struct_info);
-                    continue;
+            if v.signed {
+                switch type_info.id {
+                case i8:
+                    x := cast(^i8)value_ptr;
+                    x^ = cast(i8)result;
+                case i16:
+                    x := cast(^i16)value_ptr;
+                    x^ = cast(i16)result;
+                case i32:
+                    x := cast(^i32)value_ptr;
+                    x^ = cast(i32)result;
+                case i64, int:
+                    x := cast(^i64)value_ptr;
+                    x^ = result;
+                } 
+            } else {
+                switch type_info.id {
+                case u8:
+                    x := cast(^u8)value_ptr;
+                    x^ = cast(u8)result;
+                case u16:
+                    x := cast(^u16)value_ptr;
+                    x^ = cast(u16)result;
+                case u32:
+                    x := cast(^u32)value_ptr;
+                    x^ = cast(u32)result;
+                case u64, uint:
+                    x := cast(^u64)value_ptr;
+                    x^ = cast(u64)result;
+                } 
+            }
+        case Type_Info_Float:
+            result, ok := val.value.(json.Float);
+            if !ok {
+                int_result, ok := val.value.(json.Integer);
+                if !ok {
+                    log_error_json("Incorrect type. Type should be a float or integer", path, val);
+                    return false;
                 }
 
-                member := Member{
-                    type   = base_type_info,
-                    offset = struct_info.offsets[i],
-                };
-                (members^)[name] = member;
+                result = cast(f64)int_result;
             }
-        }
 
-        recursive_fill_member(&members, &struct_info);
+            switch type_info.id {
+            case f32:
+                x := cast(^f32)value_ptr;
+                x^ = cast(f32)result;
+            case f64:
+                x := cast(^f64)value_ptr;
+                x^ = result;
+            }
+        case Type_Info_String:
+            result, ok := val.value.(json.String);
+            if !ok {
+                log_error_json("Incorrect type. Type should be a string", path, val);
+                return false;
+            }
+
+            x := cast(^string)value_ptr;
+            x^ = strings.clone(result);
+
+        case Type_Info_Pointer:
+            elem := type_info_base(v.elem);
+
+            _, ok0 := elem.variant.(Type_Info_Struct);
+            if !ok0 {
+                log_error_json("Value for member with non asset ptr", path, val);
+                return false;   
+            }
+
+            result, ok1 := val.value.(json.String);
+            if !ok1 {
+                log_error_json("Incorrect type. Type should be a string", path, val);
+                return false;
+            }
+
+            found_asset := find(result);
+            if found_asset == nil {
+                log_error_json("Invalid path for asset ptr", path, val);
+                return false;
+            }
+
+            x := cast(^rawptr)value_ptr;
+            data, _ := any_data(found_asset.derived);
+            x^ = data;
+        case Type_Info_Array:
+            array, ok := val.value.(json.Array);
+            if !ok {
+                log_error_json("Expected type to be \"Array\"", path, val);
+                return false;
+            }
+
+            if len(array) > v.count {
+                log.errorf("Array must not be over {} long. In \"{}\" at line {} column {}", v.count, path, val.pos.line, val.pos.column);
+                return false;   
+            }
+
+            return unmarshal_array(rawptr(value_ptr), v.elem_size, v.elem, path, val);
+        case Type_Info_Dynamic_Array:
+            using runtime;
+
+            array, ok := val.value.(json.Array);
+            if !ok {
+                log_error_json("Expected type to be \"Array\"", path, val);
+                return false;
+            }
+
+            array_ptr := cast(^Raw_Dynamic_Array)value_ptr;
+            array_ptr.data = mem.alloc(v.elem_size * len(array), type_info.align);
+            array_ptr.len = len(array);
+            array_ptr.cap = len(array);
+            array_ptr.allocator = context.allocator;
+
+            return unmarshal_array(array_ptr.data, v.elem_size, v.elem, path, val);
+        case Type_Info_Slice:
+            using runtime;
+
+            array, ok := val.value.(json.Array);
+            if !ok {
+                log_error_json("Expected type to be \"Array\"", path, val);
+                return false;
+            }
+
+            array_ptr := cast(^Raw_Slice)value_ptr;
+            array_ptr.data = mem.alloc(v.elem_size * len(array), type_info.align);
+            array_ptr.len = len(array);
+
+            return unmarshal_array(array_ptr.data, v.elem_size, v.elem, path, val);
+        case: 
+            log.errorf("[Asset] Incomplete implementation. Cannot unmarshal type \"{}\". In \"{}\" at line {} column {}", type_info.id, path, val.pos.line, val.pos.column);
+            return false;
+        }   
+
+        return true;
     }
 
-    // TODO: Make this recursive so we can have nested structures to fill
-    #partial switch v in val.value {
-    case json.Object:
-        using reflect;
+    unmarshal_array :: proc(base: rawptr, elem_size: int, type_info: ^reflect.Type_Info, path: string, val: json.Value) -> bool{
+        array, ok := val.value.(json.Array);
+        assert(ok);
 
-        for key, val in v {
+        for val, i in array {
+            value_ptr := uintptr(base) + uintptr(elem_size * i);
+            ok := unmarshal_value(rawptr(value_ptr), type_info, path, val);
+            if !ok do return false;
+        }
+        return true;
+    }
+
+    unmarshal_struct :: proc(base: rawptr, type_info: ^reflect.Type_Info, path: string, val: json.Value) -> bool {
+        Member :: struct {
+            type     : ^reflect.Type_Info,
+            offset   : uintptr,
+        };
+        // We need an easy way to access all members of T's struct. This includes the 
+        // structures inside a 'using' struct. We dont want to force the json object
+        // to members to be in the same order as T's 
+        members := make(map[string]Member);
+        defer delete(members);
+        {
+            using reflect;
+
+            struct_info, ok := type_info.variant.(Type_Info_Struct);
+            assert(ok); // asset should obviously be a struct
+
+            recursive_fill_members :: proc(members: ^map[string]Member, struct_info: ^reflect.Type_Info_Struct) {
+                for name, i in struct_info.names {
+                    base_type_info := type_info_base(struct_info.types[i]);
+
+                    if struct_info.usings[i] {
+                        new_struct_info, ok := base_type_info.variant.(Type_Info_Struct);
+                        assert(ok);
+                        recursive_fill_members(members, &new_struct_info);
+                        continue;
+                    }
+
+                    member := Member{
+                        type   = base_type_info,
+                        offset = struct_info.offsets[i],
+                    };
+                    (members^)[name] = member;
+                }
+            }
+
+            recursive_fill_members(&members, &struct_info);
+        }
+
+        obj, ok := val.value.(json.Object);
+        if !ok {
+            log_error_json("Expected type to be \"Object\"", path, val);
+            return false;
+        }
+
+        for key, value in obj {
             member, found := members[key];
             if !found {
-                log.warnf("[Asset] Unknown member \"{}\" in {}", key, asset.path);
+                log.warnf("[Asset] Unknown member \"{}\" in {}", key, path);
                 continue;
             }
 
-            value_ptr := uintptr(asset) + member.offset;
-
-            #partial switch v in member.type.variant {
-            case Type_Info_Integer:
-                result, ok := val.value.(json.Integer);
-                if !ok {
-                    log.errorf("[Asset] Error \"Incorrect type. Type should be an integer\" in {} at line {} column {}", asset.path, val.pos.line, val.pos.column);
-                    continue;
-                }
-
-                if v.signed {
-                    switch member.type.id {
-                    case i8:
-                        x := cast(^i8)value_ptr;
-                        x^ = cast(i8)result;
-                    case i16:
-                        x := cast(^i16)value_ptr;
-                        x^ = cast(i16)result;
-                    case i32:
-                        x := cast(^i32)value_ptr;
-                        x^ = cast(i32)result;
-                    case i64, int:
-                        x := cast(^i64)value_ptr;
-                        x^ = result;
-                    } 
-                } else {
-                    switch member.type.id {
-                    case u8:
-                        x := cast(^u8)value_ptr;
-                        x^ = cast(u8)result;
-                    case u16:
-                        x := cast(^u16)value_ptr;
-                        x^ = cast(u16)result;
-                    case u32:
-                        x := cast(^u32)value_ptr;
-                        x^ = cast(u32)result;
-                    case u64, uint:
-                        x := cast(^u64)value_ptr;
-                        x^ = cast(u64)result;
-                    } 
-                }
-            case Type_Info_Float:
-                result, ok := val.value.(json.Float);
-                if !ok {
-                    log.errorf("[Asset] Error \"Incorrect type. Type should be a float\" in {} at line {} column {}", asset.path, val.pos.line, val.pos.column);
-                    continue;
-                }
-
-                switch member.type.id {
-                case f32:
-                    x := cast(^f32)value_ptr;
-                    x^ = cast(f32)result;
-                case f64:
-                    x := cast(^f64)value_ptr;
-                    x^ = result;
-                }
-            case Type_Info_String:
-                result, ok := val.value.(json.String);
-                if !ok {
-                    log.errorf("[Asset] Error \"Incorrect type. Type should be a string\" in {} at line {} column {}", asset.path, val.pos.line, val.pos.column);
-                    continue;
-                }
-
-                x := cast(^string)value_ptr;
-                x^ = strings.clone(result);
-
-            case Type_Info_Pointer:
-                elem := type_info_base(v.elem);
-
-                _, ok0 := elem.variant.(Type_Info_Struct);
-                if !ok0 {
-                    log.errorf("[Asset] Error \"Value for member with non asset ptr\" in {} at line {} column {} of member {}", asset.path, val.pos.line, val.pos.column, key);
-                    continue;   
-                }
-
-                result, ok1 := val.value.(json.String);
-                if !ok1 {
-                    log.errorf("[Asset] Error \"Incorrect type. Type should be a string\" in {} at line {} column {}", asset.path, val.pos.line, val.pos.column);
-                    continue;
-                }
-
-                found_asset := find(result);
-                if found_asset == nil {
-                    log.errorf("[Asset] Error \"Invalid path for asset ptr\" in {} at line {} column {}", asset.path, val.pos.line, val.pos.column);
-                    continue;
-                }
-
-                x := cast(^rawptr)value_ptr;
-                data, _ := any_data(found_asset.derived);
-                x^ = data;
-            case: 
-                log.errorf("[Asset] Incomplete implementation. Cannot unmarshal type \"{}\" for member \"{}\" in {}", member.type.id, key, asset.path);
-                continue;
-            }
+            value_ptr := uintptr(base) + member.offset;
+            ok := unmarshal_value(rawptr(value_ptr), member.type, path, value);
+            if !ok do return false;
         }
-    case:
-        log.errorf("[Asset] Error \"initial type must be object\" in {}", asset.path);
+
+        return true;
+    }
+
+    obj, ok := val.value.(json.Object);
+    if !ok {
+        log_error_json("Initial type must be object", asset.path, val);
         return false;
     }
+
+    type_info := reflect.type_info_base(type_info_of(T));
+    unmarshal_struct(asset, type_info, asset.path, val);
 
     return true;
 }
