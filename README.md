@@ -2,22 +2,20 @@
 Newport is a modular game engine built in odin for odin. It is designed to be easily extendable and easy to use.
 
 ## Plans
-* Vulkan Backend
 * DX12 Backend
-* Removal of OpenGL
-* Serialization (JSON, Binary)
 * Audio System
 * Controller Input
 
 ## Features in Progress
 * Custom ImGui
 * General graphics api
+* Vulkan Backend
 * Custom renderers
+* Serialization (JSON, Binary)
 
 ## Features
 * Modular setup for easy extension. Also allows for select parts to be used alone.
 * Fiber Job System
-* GL Rendering
 * Asset Manager
 
 ## Setup
