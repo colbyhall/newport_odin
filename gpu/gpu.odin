@@ -418,6 +418,9 @@ compile_into_shader_cache :: proc(source: []u8, using shader: ^Shader) -> (conte
 
         // For vulkan
         append(&arguments, win32.utf8_to_wstring("-spirv"));
+
+        // O3 optimization
+        append(&arguments, win32.utf8_to_wstring("-O3"));
     }
 
     // Compile the actual HLSL using our arguments
