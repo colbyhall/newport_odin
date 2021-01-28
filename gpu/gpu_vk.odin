@@ -247,8 +247,6 @@ init_vulkan :: proc() {
         result = vk.CreateSemaphore(logical_gpu, &create_info, nil, &render_finished_semaphore);
         assert(result == .SUCCESS);
     }
-
-    dxc.init(.Vulkan);
 }
 
 @private 
