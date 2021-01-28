@@ -7,6 +7,7 @@ import "core:log"
 import "core:reflect"
 
 import "core:fmt" // temp
+import "core:time"
 
 import "vk"
 import "../engine"
@@ -867,21 +868,27 @@ draw :: proc(buffer: Command_Buffer, auto_cast vertex_count: int, auto_cast firs
 submit_multiple :: proc(buffers: []Command_Buffer) {
     using state := get(Vulkan_Graphics);
 
-    wait_stage : vk.PipelineStageFlags = { .COLOR_ATTACHMENT_OUTPUT };
+    dur : time.Duration;
+    {
+        time.SCOPED_TICK_DURATION(&dur);
+        wait_stage : vk.PipelineStageFlags = { .COLOR_ATTACHMENT_OUTPUT };
 
-    submit_info := vk.SubmitInfo{
-        sType                = .SUBMIT_INFO,
-        waitSemaphoreCount   = 1,
-        pWaitSemaphores      = &image_available_semaphore,
-        pWaitDstStageMask    = &wait_stage,
-        commandBufferCount   = u32(len(buffers)),
-        pCommandBuffers      = auto_cast &buffers[0],
-        // signalSemaphoreCount = 1,
-        // pSignalSemaphores    = &render_finished_semaphore,
-    };
+        submit_info := vk.SubmitInfo{
+            sType                = .SUBMIT_INFO,
+            waitSemaphoreCount   = 1,
+            pWaitSemaphores      = &image_available_semaphore,
+            pWaitDstStageMask    = &wait_stage,
+            commandBufferCount   = u32(len(buffers)),
+            pCommandBuffers      = auto_cast &buffers[0],
+            // signalSemaphoreCount = 1,
+            // pSignalSemaphores    = &render_finished_semaphore,
+        };
 
-    vk.QueueSubmit(graphics_queue, 1, &submit_info, 0);
-    vk.QueueWaitIdle(graphics_queue);
+        vk.QueueSubmit(graphics_queue, 1, &submit_info, 0);
+        vk.QueueWaitIdle(graphics_queue);
+    }
+
+    // fmt.println(dur);
 }
 
 submit_single :: proc(buffer: Command_Buffer) {

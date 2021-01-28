@@ -412,15 +412,15 @@ compile_into_shader_cache :: proc(source: []u8, using shader: ^Shader) -> (conte
         append(&arguments, win32.utf8_to_wstring("main"));
         append(&arguments, win32.utf8_to_wstring("-T"));
         switch type {
-        case .Pixel: append(&arguments, win32.utf8_to_wstring("ps_6_6"));
-        case .Vertex: append(&arguments, win32.utf8_to_wstring("vs_6_6"));
+        case .Pixel: append(&arguments, win32.utf8_to_wstring("ps_6_3"));
+        case .Vertex: append(&arguments, win32.utf8_to_wstring("vs_6_3"));
         }
 
         // For vulkan
         append(&arguments, win32.utf8_to_wstring("-spirv"));
 
         // O3 optimization
-        append(&arguments, win32.utf8_to_wstring("-O3"));
+        append(&arguments, win32.utf8_to_wstring("-Od"));
     }
 
     // Compile the actual HLSL using our arguments
