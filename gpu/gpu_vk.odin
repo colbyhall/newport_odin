@@ -12,8 +12,6 @@ import "vk"
 import "../engine"
 import "../asset"
 
-import "../deps/dxc"
-
 when ODIN_OS == "windows" { 
     import "core:sys/win32"
 }
@@ -458,9 +456,6 @@ init_shader :: proc(using s: ^Shader, contents: []byte) {
         codeSize = len(contents),
         pCode    = cast(^u32)&contents[0],
     };
-
-    // TODO(colby): somehow determine what type of shader this is.
-    // The question is whether we'll have metadata or just use the file extension
 
     using state := get(Vulkan_Graphics);
 

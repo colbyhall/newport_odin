@@ -11,6 +11,7 @@ import "core:log"
 import "core:encoding/json"
 import "core:sync"
 import "core:runtime"
+import "core:time"
 
 ASSETS_PATH :: "assets";
 
@@ -20,6 +21,8 @@ Asset :: struct {
 
     loaded  : bool,
     loading : bool,
+    
+    last_write_time : time.Time,
 
     derived : any,
 }
@@ -43,7 +46,7 @@ Test :: struct {
     slice : []f32,
 }
 
-Register :: #type proc(path: string) -> ^Asset;
+Register :: #type proc(path: string, last_write_time: time.Time) -> ^Asset;
 Load     :: #type proc(using asset: ^Asset) -> bool;
 Unload   :: #type proc(using asset: ^Asset) -> bool;
 
@@ -65,11 +68,12 @@ Manager :: struct {
 @private manager : Manager;
 
 register_auto :: proc($T: typeid, extensions: []string) {
-    register_proc :: proc(path: string) -> ^Asset {
+    register_proc :: proc(path: string, last_write_time: time.Time) -> ^Asset {
         // TODO: Check if this is necessary 
         it        := cast(^T)mem.alloc(reflect.size_of_typeid(T)); // Doing this to ensure type info is saved
         it.path    = path;
         it.derived = it^;
+        it.last_write_time = last_write_time;
         return it;
     }
 
@@ -90,11 +94,12 @@ register_auto :: proc($T: typeid, extensions: []string) {
 }
 
 register_explicit :: proc($T: typeid, extensions: []string, load: Load, unload: Unload) {
-    register_proc :: proc(path: string) -> ^Asset {
+    register_proc :: proc(path: string, last_write_time: time.Time) -> ^Asset {
         // TODO: Check if this is necessary 
         it        := cast(^T)mem.alloc(reflect.size_of_typeid(T)); // Doing this to ensure type info is saved
         it.path    = path;
         it.derived = it^;
+        it.last_write_time = last_write_time;
         return it;
     }
     
@@ -138,7 +143,7 @@ discover :: proc() {
         if reg == nil do return os.ERROR_NONE, false;
 
         path := strings.clone(rel_path);
-        assets[path] = reg.register(path);
+        assets[path] = reg.register(path, info.modification_time);
 
         return os.ERROR_NONE, false;
     }
