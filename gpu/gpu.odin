@@ -420,7 +420,7 @@ compile_into_shader_cache :: proc(source: []u8, using shader: ^Shader) -> (conte
         append(&arguments, win32.utf8_to_wstring("-spirv"));
 
         // O3 optimization
-        append(&arguments, win32.utf8_to_wstring("-Od"));
+        append(&arguments, win32.utf8_to_wstring("-O3"));
     }
 
     // Compile the actual HLSL using our arguments
@@ -490,8 +490,6 @@ compile_into_shader_cache :: proc(source: []u8, using shader: ^Shader) -> (conte
 
     return;
 }
-
-import "core:fmt"
 
 shutdown_shader_cache :: proc() {
     cache := &shader_cache;
