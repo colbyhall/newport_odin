@@ -20,8 +20,8 @@ rect_pos_size :: core.rect_pos_size;
 
 // All supported types of shaders
 Shader_Type :: enum {
+    Pixel,
     Vertex,
-    Fragment,
     // TODO(colby): Compute
 }
 
@@ -133,8 +133,6 @@ Color_Mask :: enum {
     Blue,
     Alpha,
 }
-
-Uniform_Map :: map[string]Uniforms;
 
 // Pipelines describe how the graphics API will draw something.
 //

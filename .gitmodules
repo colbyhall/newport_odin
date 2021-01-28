@@ -1,3 +1,7 @@
 [submodule "deps/stb"]
     path = deps/stb
-    url = https://github.com/Colbeyyy/odin-stb
+    url = https://github.com/colbyhall/odin-stb
+
+[submodule "deps/dxc"]
+    path = deps/dxc
+    url = https://github.com/colbyhall/odin-dxc

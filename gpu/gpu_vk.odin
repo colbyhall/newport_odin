@@ -12,6 +12,8 @@ import "vk"
 import "../engine"
 import "../asset"
 
+import "../deps/dxc"
+
 when ODIN_OS == "windows" { 
     import "core:sys/win32"
 }
@@ -245,6 +247,8 @@ init_vulkan :: proc() {
         result = vk.CreateSemaphore(logical_gpu, &create_info, nil, &render_finished_semaphore);
         assert(result == .SUCCESS);
     }
+
+    dxc.init(.Vulkan);
 }
 
 @private 
@@ -489,7 +493,7 @@ make_graphics_pipeline :: proc(using description: Graphics_Pipeline_Description,
         stage : vk.ShaderStageFlag;
         switch it.type {
         case .Vertex:   stage = .VERTEX;
-        case .Fragment: stage = .FRAGMENT;
+        case .Pixel: stage = .FRAGMENT;
         }
 
         stage_info := vk.PipelineShaderStageCreateInfo{
