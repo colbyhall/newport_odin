@@ -404,7 +404,7 @@ compile_into_shader_cache :: proc(source: []u8, using shader: ^Shader) -> (conte
     buffer.Size = source_blob->GetBufferSize();
     buffer.Encoding = CP_UTF8;
 
-    // Bild the arguments list
+    // Build the arguments list
     arguments := make([dynamic]win32.Wstring, 0, 12);
     defer delete(arguments);
     {
