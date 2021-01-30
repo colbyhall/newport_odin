@@ -179,7 +179,7 @@ default_graphics_pipeline_description :: proc(render_pass: ^Render_Pass) -> Grap
         draw_mode  = .Fill,
         line_width = 1.0,
 
-        cull_mode  = { .Back },
+        cull_mode  = { },
 
         color_mask = { .Red, .Green, .Blue, .Alpha },
 

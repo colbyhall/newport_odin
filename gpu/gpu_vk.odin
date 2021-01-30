@@ -479,9 +479,11 @@ Graphics_Pipeline :: struct {
 
     set_pool : vk.DescriptorPool,
     sets     : []vk.DescriptorSet,
+
+    ubo : Buffer,
 }
 
-make_graphics_pipeline :: proc(using description: Graphics_Pipeline_Description, loc := #caller_location) -> Graphics_Pipeline {
+make_graphics_pipeline :: proc(using description: Graphics_Pipeline_Description, $UBO: typeid, loc := #caller_location) -> Graphics_Pipeline {
     check(loc);
 
     using state := get(Vulkan_Graphics);
@@ -693,16 +695,31 @@ make_graphics_pipeline :: proc(using description: Graphics_Pipeline_Description,
     // Allocate the descriptor sets
     // TODO: Use the layouts slice
     pool_size := vk.DescriptorPoolSize{
-        // sType = 
+        type = .UNIFORM_BUFFER,
+        descriptorCount = 1,
     };
 
     pool_info := vk.DescriptorPoolCreateInfo{
         sType = .DESCRIPTOR_POOL_CREATE_INFO,
         poolSizeCount = 1,
+        pPoolSizes = &pool_size,
+        maxSets = 1,
     };
 
     set_pool : vk.DescriptorPool;
-    // result = vk.CreateDescriptorPool(logical_gpu, )
+    result = vk.CreateDescriptorPool(logical_gpu, &pool_info, nil, &set_pool);
+    assert(result == .SUCCESS);
+
+    set_alloc_info := vk.DescriptorSetAllocateInfo{
+        sType = .DESCRIPTOR_SET_ALLOCATE_INFO,
+        descriptorPool = set_pool,
+        descriptorSetCount = 1,
+        pSetLayouts = &set_layout,
+    };
+
+    sets := make([]vk.DescriptorSet, 1);
+    result = vk.AllocateDescriptorSets(logical_gpu, &set_alloc_info, &sets[0]);
+    assert(result == .SUCCESS);
 
     // TODO(colby): Look into what a pipeline layout is and why
     pipeline_layout_info := vk.PipelineLayoutCreateInfo{
@@ -737,10 +754,19 @@ make_graphics_pipeline :: proc(using description: Graphics_Pipeline_Description,
     result = vk.CreateGraphicsPipelines(logical_gpu, 0, 1, &create_info, nil, &handle);
     assert(result == .SUCCESS);
 
+    ubo := make_buffer({ .UNIFORM_BUFFER }, { .HOST_VISIBLE, .HOST_COHERENT }, size_of(UBO));
+
     return Graphics_Pipeline{ 
         description = description, 
         handle      = handle, 
-        layout      = layout 
+        
+        layout      = layout,
+        set_layout  = set_layout,
+
+        set_pool    = set_pool,
+        sets        = sets,
+
+        ubo = ubo,
     };
 }
 
@@ -872,7 +898,9 @@ render_pass_scope :: proc(buffer: Command_Buffer, render_pass: ^Render_Pass, fra
 }
 
 // TODO(colby): Look into if we can use the current render pass's attachment info
-bind_graphics_pipeline :: proc(buffer: Command_Buffer, pipeline: ^Graphics_Pipeline, viewport: Vector2, scissor: Maybe(Rect) = nil) {
+bind_graphics_pipeline :: proc(buffer: Command_Buffer, pipeline: ^Graphics_Pipeline, viewport: Vector2, ubo : ^$T, scissor: Maybe(Rect) = nil) {
+    using state := get(Vulkan_Graphics);
+
     vk.CmdBindPipeline(buffer.handle, .GRAPHICS, pipeline.handle);
 
     vk_viewport := vk.Viewport{
@@ -898,9 +926,41 @@ bind_graphics_pipeline :: proc(buffer: Command_Buffer, pipeline: ^Graphics_Pipel
         rect.extent.height = u32(size.y);
         vk.CmdSetScissor(buffer.handle, 0, 1, &rect);
     }
+
+    if ubo == nil do return;
+
+    data: rawptr;
+    vk.MapMemory(logical_gpu, pipeline.ubo.memory, 0, vk.DeviceSize(size_of(T)), {}, &data);
+    mem.copy(data, ubo, size_of(T));
+    vk.UnmapMemory(logical_gpu, pipeline.ubo.memory);
+
+    buffer_info := vk.DescriptorBufferInfo{
+        buffer = pipeline.ubo.handle,
+        offset = 0,
+        range  = vk.DeviceSize(size_of(T))
+    };
+
+    set_write := vk.WriteDescriptorSet{
+        sType  = .WRITE_DESCRIPTOR_SET,
+        dstSet = pipeline.sets[0],
+        dstBinding = 0,
+        dstArrayElement = 0,
+        descriptorType = .UNIFORM_BUFFER,
+        descriptorCount = 1,
+        pBufferInfo = &buffer_info,
+        // pImageInfo
+        // pTexelBufferView
+    };
+
+    vk.UpdateDescriptorSets(logical_gpu, 1, &set_write, 0, nil);
+
+    vk.CmdBindDescriptorSets(buffer.handle, .GRAPHICS, pipeline.layout, 0, 1, &pipeline.sets[0], 0, nil);
 }
 
 bind_pipeline :: proc{ bind_graphics_pipeline };
+
+bind_ubo :: proc(buffer: Command_Buffer, ubo: ^$T) {
+}
 
 bind_vertex_buffer :: proc(buffer: Command_Buffer, vb: Vertex_Buffer) {
     vb := vb;

@@ -11,7 +11,6 @@ import "core:log"
 import "../deps/dxc"
 
 import "../core"
-
 import "../asset"
 
 Shader_Cache_Entry :: struct {
@@ -26,7 +25,7 @@ Shader_Cache_Entry :: struct {
     next     : uintptr,
 }
 
-SHADER_CACHE_FILE_VERSION :: 3;
+SHADER_CACHE_FILE_VERSION :: 16;
 
 Shader_Cache_File :: struct {
     entries : uintptr,
@@ -164,19 +163,24 @@ compile_into_shader_cache :: proc(source: []u8, using shader: ^Shader) -> (conte
         append(&arguments, win32.utf8_to_wstring("-E"));
         append(&arguments, win32.utf8_to_wstring("main"));
         append(&arguments, win32.utf8_to_wstring("-T"));
+
         switch type {
-        case .Pixel: append(&arguments, win32.utf8_to_wstring("ps_6_3"));
-        case .Vertex: append(&arguments, win32.utf8_to_wstring("vs_6_3"));
+        case .Pixel: append(&arguments, win32.utf8_to_wstring("ps_6_1"));
+        case .Vertex: append(&arguments, win32.utf8_to_wstring("vs_6_1"));
         }
 
         when USE_VULKAN {
             // For vulkan
             append(&arguments, win32.utf8_to_wstring("-spirv"));
             append(&arguments, win32.utf8_to_wstring("-fspv-reflect"));
+
+            if type == .Vertex {
+                // append(&arguments, win32.utf8_to_wstring("-fvk-invert-y"));
+            }
         }
 
         // O3 optimization
-        append(&arguments, win32.utf8_to_wstring("-O3"));
+        // append(&arguments, win32.utf8_to_wstring("-O3"));
     }
 
     // Compile the actual HLSL using our arguments
