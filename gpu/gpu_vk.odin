@@ -468,7 +468,12 @@ Graphics_Pipeline :: struct {
     using description : Graphics_Pipeline_Description,
 
     handle : vk.Pipeline,
+    
     layout : vk.PipelineLayout,
+    set_layout : vk.DescriptorSetLayout,
+
+    set_pool : vk.DescriptorPool,
+    sets     : []vk.DescriptorSet,
 }
 
 make_graphics_pipeline :: proc(using description: Graphics_Pipeline_Description, loc := #caller_location) -> Graphics_Pipeline {
@@ -507,6 +512,7 @@ make_graphics_pipeline :: proc(using description: Graphics_Pipeline_Description,
         inputRate = .VERTEX,
     };
 
+    // Build the attributes from the runtime reflection
     attributes := make([dynamic]vk.VertexInputAttributeDescription, 0, 12, context.temp_allocator);
     {
         using reflect;
@@ -578,7 +584,7 @@ make_graphics_pipeline :: proc(using description: Graphics_Pipeline_Description,
     if .Front in cull_mode do cull |= { .FRONT };
     if .Back in cull_mode do cull |= { .BACK };
 
-    // NOTE(colby): Depth Testing goes around here somewhere
+    // NOTE: Depth Testing goes around here somewhere
     rasterizer_state := vk.PipelineRasterizationStateCreateInfo{
         sType       = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
         polygonMode = polygon_mode,
@@ -658,13 +664,50 @@ make_graphics_pipeline :: proc(using description: Graphics_Pipeline_Description,
         pDynamicStates      = &dynamic_states[0],
     };
 
+
+    // Descriping the pipeline layout
+    // TODO: Define layouts via a slice passed in with some description structure
+    ubo_layout_binding := vk.DescriptorSetLayoutBinding{
+        binding             = 0,
+        descriptorType      = .UNIFORM_BUFFER,
+        descriptorCount     = 1,
+        stageFlags          = { .VERTEX },
+        pImmutableSamplers  = nil,
+    };
+
+    set_layout_info := vk.DescriptorSetLayoutCreateInfo{
+        sType        = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        bindingCount = 1,
+        pBindings    = &ubo_layout_binding,
+    };
+
+    set_layout : vk.DescriptorSetLayout;
+    result := vk.CreateDescriptorSetLayout(logical_gpu, &set_layout_info, nil, &set_layout);
+    assert(result == .SUCCESS);
+
+    // Allocate the descriptor sets
+    // TODO: Use the layouts slice
+    pool_size := vk.DescriptorPoolSize{
+        // sType = 
+    };
+
+    pool_info := vk.DescriptorPoolCreateInfo{
+        sType = .DESCRIPTOR_POOL_CREATE_INFO,
+        poolSizeCount = 1,
+    };
+
+    set_pool : vk.DescriptorPool;
+    // result = vk.CreateDescriptorPool(logical_gpu, )
+
     // TODO(colby): Look into what a pipeline layout is and why
     pipeline_layout_info := vk.PipelineLayoutCreateInfo{
-        sType = .PIPELINE_LAYOUT_CREATE_INFO,
+        sType          = .PIPELINE_LAYOUT_CREATE_INFO,
+        setLayoutCount = 1,
+        pSetLayouts    = &set_layout,
     };
 
     layout : vk.PipelineLayout;
-    result := vk.CreatePipelineLayout(logical_gpu, &pipeline_layout_info, nil, &layout);
+    result = vk.CreatePipelineLayout(logical_gpu, &pipeline_layout_info, nil, &layout);
     assert(result == .SUCCESS);
 
     create_info := vk.GraphicsPipelineCreateInfo{
