@@ -6,6 +6,6 @@
     path = deps/dxc
     url = https://github.com/colbyhall/odin-dxc
 
-[submodule "deps/spirv-reflect"]
-    path = deps/spirv-reflect
+[submodule "deps/spirv_reflect"]
+    path = deps/spirv_reflect
     url = https://github.com/colbyhall/odin-spirv-reflect.git
