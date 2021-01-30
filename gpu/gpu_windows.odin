@@ -25,7 +25,7 @@ Shader_Cache_Entry :: struct {
     next     : uintptr,
 }
 
-SHADER_CACHE_FILE_VERSION :: 16;
+SHADER_CACHE_FILE_VERSION :: 17;
 
 Shader_Cache_File :: struct {
     entries : uintptr,
@@ -169,18 +169,20 @@ compile_into_shader_cache :: proc(source: []u8, using shader: ^Shader) -> (conte
         case .Vertex: append(&arguments, win32.utf8_to_wstring("vs_6_1"));
         }
 
+        append(&arguments, win32.utf8_to_wstring("-Zpc")); // Use column major as the math lib is column major
+
         when USE_VULKAN {
             // For vulkan
             append(&arguments, win32.utf8_to_wstring("-spirv"));
             append(&arguments, win32.utf8_to_wstring("-fspv-reflect"));
 
             if type == .Vertex {
-                // append(&arguments, win32.utf8_to_wstring("-fvk-invert-y"));
+                append(&arguments, win32.utf8_to_wstring("-fvk-invert-y"));
             }
         }
 
         // O3 optimization
-        // append(&arguments, win32.utf8_to_wstring("-O3"));
+        append(&arguments, win32.utf8_to_wstring("-O3"));
     }
 
     // Compile the actual HLSL using our arguments

@@ -77,18 +77,32 @@ v4 :: proc { v4s, v4xyzw };
 
 Matrix4 :: la.Matrix4;
 
-m4_ortho :: proc(size, aspect_ratio, near, far: f32, flip_z_axis := true) -> Matrix4 {
+// NOTE: I've gone back and rewritten the projection functions for property 0 - 1 Z clipping
+ortho :: proc(size, aspect_ratio, near, far: f32, flip_z_axis := true) -> Matrix4 {
     right := size * aspect_ratio;
     left  := -right;
     
     top   := size;
     bot   := -top;
 
-    return la.matrix_ortho3d(left, right, bot, top, near, far, flip_z_axis);
+    result := la.matrix_ortho3d(left, right, bot, top, near, far, flip_z_axis);
+
+    // Depth 0 - 1 
+    result[2][2] = -1 / (far - near);
+    result[3][2] = -near / (far - near);
+
+    return result;
 }
 
-ortho        :: proc { la.matrix_ortho3d, m4_ortho };
-persp        :: la.matrix4_perspective;
+persp :: proc(fov, aspect_ratio, near, far: f32, flip_z_axis := true) -> Matrix4 {
+    result := la.matrix4_perspective(fov, aspect_ratio, near, far, flip_z_axis);
+
+    result[2][2] = far / (near - far);
+    result[3][2] = -(far * near) / (far - near);
+
+    return result;
+}
+
 transpose    :: la.transpose;
 translate    :: la.matrix4_translate;
 scale        :: la.matrix4_scale;
