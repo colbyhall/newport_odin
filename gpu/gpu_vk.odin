@@ -1,5 +1,7 @@
 package gpu
 
+when USE_VULKAN {
+
 import "core:mem"
 import "core:dynlib"
 import "core:runtime"
@@ -448,6 +450,9 @@ Shader :: struct {
     type   : Shader_Type,
     module : vk.ShaderModule,
 }
+
+// TODO: Reflect generates pipeline set description
+import "../deps/spirv_reflect"
 
 init_shader :: proc(using s: ^Shader, contents: []byte) {
     check();
@@ -930,8 +935,6 @@ submit_multiple :: proc(buffers: []Command_Buffer) {
         vk.QueueSubmit(graphics_queue, 1, &submit_info, 0);
         vk.QueueWaitIdle(graphics_queue);
     }
-
-    // fmt.println(dur);
 }
 
 submit_single :: proc(buffer: Command_Buffer) {
@@ -1077,3 +1080,5 @@ Texture2d :: struct {
 upload_texture :: proc(using t: ^Texture2d) -> bool {
     return false;
 }
+
+} // ~USE_VULKAN

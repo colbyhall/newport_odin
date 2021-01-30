@@ -5,3 +5,7 @@
 [submodule "deps/dxc"]
     path = deps/dxc
     url = https://github.com/colbyhall/odin-dxc
+
+[submodule "deps/spirv-reflect"]
+    path = deps/spirv-reflect
+    url = https://github.com/colbyhall/odin-spirv-reflect.git
