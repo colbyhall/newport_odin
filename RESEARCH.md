@@ -19,6 +19,7 @@ As I've been working on this project I've realized that I need a space to throw 
 [DirectXCompiler](#directxcompiler)<br>
 [Hardware Abstraction Layer](#hardware-abstraction-layer)<br>
 [Frame Graph](#frame-graph)<br>
+[Forward+ Rendering](#forward+-rendering)<br>
 
 
 ## Fiber Based Job System
@@ -75,3 +76,10 @@ I've spent a good bit of time researching Frame/Render graphs to determine if I 
 [Render graphs and Vulkan - a deep dive](https://themaister.net/blog/2017/08/15/render-graphs-and-vulkan-a-deep-dive/)<br>
 [Simon's Tech Blog: Render Graph](http://simonstechblog.blogspot.com/2019/07/render-graph.html)<br>
 [FrameGraph: Extensible Rendering Architecture in Frostbite](https://www.gdcvault.com/play/1024612/FrameGraph-Extensible-Rendering-Architecture-in)<br>
+
+## Forward+ Rendering
+It seems that deferred is slowly losing the grasp it once had on the industry. Games like Doom Eternal seem to really be pushing forward what is capable with graphics by using Forward+. 
+
+### Articles
+[Forward vs Deferred vs Forward+ Rendering with DirectX 11](https://www.3dgep.com/forward-plus/)
+[Doom Eternal - Graphics Study](https://simoncoenen.com/blog/programming/graphics/DoomEternalStudy.html)
