@@ -63,6 +63,7 @@ This has been something thats been on my mind for years now. The more I dig the 
 [Vulkan Textures Unbound](http://roar11.com/2019/06/vulkan-textures-unbound/)<br>
 [Halcyon Architecture "Director's Cut"](https://media.contentapi.ea.com/content/dam/ea/seed/presentations/wihlidal-halcyonarchitecture-notes.pdf)<br>
 [A modern rendering architecture](https://ourmachinery.com/post/a-modern-rendering-architecture/)<br>
+[A Comparison of Modern Graphics APIs](https://alain.xyz/blog/comparison-of-modern-graphics-apis)<br>
 
 ### Additional Thoughts
 I'm going to be following in the mindset of Alex Tardif in his article [An Opinionated Post on Modern Rendering Abstraction Layers](http://alextardif.com/RenderingAbstractionLayers.html). I want to keep things as simple as possible and not limit the user too much.
@@ -81,5 +82,5 @@ I've spent a good bit of time researching Frame/Render graphs to determine if I 
 It seems that deferred is slowly losing the grasp it once had on the industry. Games like Doom Eternal seem to really be pushing forward what is capable with graphics by using Forward+. 
 
 ### Articles
-[Forward vs Deferred vs Forward+ Rendering with DirectX 11](https://www.3dgep.com/forward-plus/)
-[Doom Eternal - Graphics Study](https://simoncoenen.com/blog/programming/graphics/DoomEternalStudy.html)
+[Forward vs Deferred vs Forward+ Rendering with DirectX 11](https://www.3dgep.com/forward-plus/)<br>
+[Doom Eternal - Graphics Study](https://simoncoenen.com/blog/programming/graphics/DoomEternalStudy.html)<br>
