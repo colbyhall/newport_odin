@@ -262,7 +262,7 @@ Texture2d_Shared :: struct {
     srgb      : bool,
 }
 
-import "../deps/stbi"
+import "../deps/stb/stbi"
 import "core:os"
 
 register_texture2d :: proc() {
@@ -275,7 +275,7 @@ register_texture2d :: proc() {
         defer delete(raw);
 
         width, height, depth : i32;
-        pixels := stbi.load(&raw[0], len(raw), &width, &height, &depth, 0);
+        pixels := stbi.load_from_memory(&raw[0], i32(len(raw)), &width, &height, &depth, 0);
         if pixels == nil do return false; // TODO: Cleanup data loaded from json
 
         tex.pixels = mem.slice_ptr(pixels, (int)(width * height * depth));
