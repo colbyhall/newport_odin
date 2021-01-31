@@ -239,6 +239,7 @@ init :: proc() {
 
     // Asset format registration
     register_shader();
+    register_texture2d();
 
     // init_shader_catalog();
     // init_texture_catalog();
@@ -252,4 +253,51 @@ shutdown :: proc() {
 @(deferred_out=shutdown)
 init_scoped :: proc() {
     init();
+}
+
+Texture2d_Shared :: struct {
+    using asset : asset.Asset,
+
+    data_path : string,
+    srgb      : bool,
+}
+
+import "../deps/stbi"
+import "core:os"
+
+register_texture2d :: proc() {
+    load :: proc(tex: ^Texture2d) -> bool {
+        ok := asset.load_from_json(tex);
+        if !ok do return false;
+
+        raw, found := os.read_entire_file(tex.data_path);
+        if !found do return false; // TODO: Cleanup data loaded from json
+        defer delete(raw);
+
+        width, height, depth : i32;
+        pixels := stbi.load(&raw[0], len(raw), &width, &height, &depth, 0);
+        if pixels == nil do return false; // TODO: Cleanup data loaded from json
+
+        tex.pixels = mem.slice_ptr(pixels, (int)(width * height * depth));
+        tex.width  = int(width);
+        tex.height = int(height);
+        tex.depth  = int(depth);
+
+        // TODO: Loading the actual texture
+
+        return true;
+    }
+
+    unload :: proc(using tex: ^Texture2d) -> bool {
+        // INCOMPLETE
+        return true;
+    }
+
+    @static extensions := []string{
+        "tex2d",
+        "texture2d",
+        "t2d",
+    };
+
+    asset.register(Texture2d, extensions, auto_cast load, auto_cast unload);
 }

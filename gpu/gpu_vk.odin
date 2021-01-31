@@ -1129,16 +1129,13 @@ Framebuffer :: struct {
     attachments   : []Framebuffer_Attachment,
 }
 
-// UNIMPLEMENTED
 Texture2d :: struct {
-    using asset : asset.Asset,
+    using shared : Texture2d_Shared,
 
+    // This should not be touched in the asset file
     pixels : []u8,
     width, height, depth: int,
 }
 
-upload_texture :: proc(using t: ^Texture2d) -> bool {
-    return false;
-}
 
 } // ~USE_VULKAN

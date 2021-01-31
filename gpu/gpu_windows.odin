@@ -299,10 +299,10 @@ register_shader :: proc() {
         return true;
     }
 
-    @static extensions := [?]string{
+    @static extensions := []string{
         "hlps", // Pixel shader
         "hlvs", // Vertex shader
     };
 
-    asset.register(Shader, extensions[:], auto_cast load, auto_cast unload);
+    asset.register(Shader, extensions, auto_cast load, auto_cast unload);
 }
