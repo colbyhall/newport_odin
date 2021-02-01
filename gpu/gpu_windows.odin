@@ -171,7 +171,7 @@ compile_into_shader_cache :: proc(source: []u8, using shader: ^Shader) -> (conte
 
         append(&arguments, win32.utf8_to_wstring("-Zpc")); // Use column major as the math lib is column major
 
-        when USE_VULKAN {
+        when BACK_END == .Vulkan {
             // For vulkan
             append(&arguments, win32.utf8_to_wstring("-spirv"));
             append(&arguments, win32.utf8_to_wstring("-fspv-reflect"));
