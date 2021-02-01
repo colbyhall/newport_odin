@@ -187,9 +187,9 @@ Attachment_Type :: enum {
 }
 
 Attachment_Description :: struct {
-    format      : Texture_Format,
-    type        : Attachment_Type,
-    clear_color : Maybe(Linear_Color),
+    format : Format,
+    type   : Attachment_Type,
+    clear  : bool,  
 }
 
 // All supported types of shaders
@@ -221,15 +221,16 @@ Uniforms :: union {
     // ^Texture2d,
 }
 
-// All supported texture formats
-Texture_Format :: enum {
+Format :: enum {
     Undefined,
 
-    RGB8,
-    RGBA8,
-    RGBA8_SRGB,
+    RGB_U8,
+    RGBA_U8,
+    RGBA_U8_SRGB,
     
-    RGBAF16,
+    RGBA_F16,
+
+    BGR_U8_SRGB,
 }
 
 // All supported texture wraps

@@ -27,12 +27,18 @@ instance_layers := [?]cstring{
     "VK_LAYER_KHRONOS_validation",
 };
 
-vk_format :: proc (format: Texture_Format) -> vk.Format {
+vk_format :: proc (format: Format) -> vk.Format {
     switch format {
-    case .Undefined: asset(false);
+    case .RGB_U8:       return .R8G8B8_UINT;
+    case .RGBA_U8:      return .R8G8B8A8_UINT;
+    case .RGBA_U8_SRGB: return .R8G8B8A8_SRGB;
+    case .RGBA_F16:     return .R16G16B16A16_SFLOAT;
+    case .BGR_U8_SRGB:  return .B8G8R8A8_SRGB;
+
+    case .Undefined:    return .UNDEFINED;
     }
 
-    return .Undefined;
+    return .UNDEFINED;
 }
 
 init_vulkan :: proc(window: ^core.Window) -> ^Device {
@@ -461,9 +467,42 @@ make_render_pass :: proc(using device: ^Device, attachments: []Attachment_Descri
 
     vk_attachments := make([]vk.AttachmentDescription, len(attachments), context.temp_allocator);
     for it, i in attachments {
-        attachment := vk.AttachmentDescription{
+        format := vk_format(it.format);
 
+        attachment := vk.AttachmentDescription{
+            format  = format,
+            samples = { ._1 },
+
+            loadOp  = .LOAD,
+            storeOp = .STORE,
+
+            stencilLoadOp  = .DONT_CARE,
+            stencilStoreOp = .DONT_CARE,
+
+            initialLayout = .UNDEFINED,
+        };
+
+        if clear_color do attachment.loadOp = .CLEAR;
+
+        switch it.type {
+        case .Color: attachment.finalLayout = .SHADER_READ_ONLY_OPTIMAL;
+        case .Depth: assert(false); // UNIMPLEMENTED
+        case .Backbuffer: attachment.finalLayout = .PRESENT_SRC_KHR;
         }
+
+        ref := vk.AttachmentReference{
+            attachment = u32(i),
+            layout     = .COLOR_ATTACHMENT_OPTIMAL,
+        };
+
+        if it.type == .Depth {
+            ref.layout = .DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+            depth_refs = ref;
+            assert(subpass.pDepthStencilAttachment == nil);
+
+            subpass.pDepthStencilAttachment = &depth_refs;
+        } else do append(&color_refs, ref);
     }
 
     subpass.colorAttachmentCount = u32(len(color_refs));
