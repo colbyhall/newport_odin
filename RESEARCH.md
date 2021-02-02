@@ -15,6 +15,7 @@ As I've been working on this project I've realized that I need a space to throw 
 ### Table Of Contents
 [Fiber Based Job System](#fiber-based-job-system)<br>
 [Asset Manager](#asset-manager)<br>
+[Vulkan](#vulkan)<br>
 [COM in C](#com-in-c)<br>
 [DirectXCompiler](#directxcompiler)<br>
 [Hardware Abstraction Layer](#hardware-abstraction-layer)<br>
@@ -35,6 +36,14 @@ A lot of what I used in this asset manager came from experience. It's strongly b
 ### Articles
 [The Machinery Asset Pipeline](https://ourmachinery.com/post/the-machinery-asset-pipeline/)<br>
 [The Truth](https://ourmachinery.com/post/the-story-behind-the-truth-designing-a-data-model/)<br>
+
+## Vulkan
+Vulkan is the first graphics back end to be implemented. This means that the api is volatile until I can compere and contrast between the others
+
+### Articles
+[Yet another blog explaining Vulkan synchronization](https://themaister.net/blog/2019/08/14/yet-another-blog-explaining-vulkan-synchronization/)<br>
+[Vulkan Barriers Explained](https://gpuopen.com/learn/vulkan-barriers-explained/)<br>
+[Synchronization-Examples](https://github.com/KhronosGroup/Vulkan-Docs/wiki/Synchronization-Examples)<br>
 
 ## COM in C
 I had never worked with COM in my entire life. I have lots of questions about the design decisions but to be fair to the creators I'm not aware of COM's full capabilities so I will give them the benefit of the doubt. 
