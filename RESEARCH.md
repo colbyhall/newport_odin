@@ -9,7 +9,7 @@ As I've been working on this project I've realized that I need a space to throw 
 |DirectXCompiler| Windows, Linux, XBOX   |Runtime Shader Compilation|
 |SPIRV Reflect  | Windows, Linux, Switch |Vulkan Description Layout |
 |STB            | All                    |PNG, JPG, TTF, .OGG       |
-|WASABI         | Windows, XBOX          |Audio                     |
+|WASAPI         | Windows, XBOX          |Audio                     |
 |XInput         | Windows, XBOX          |Controller Support        |
 
 ### Table Of Contents
