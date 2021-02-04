@@ -15,14 +15,20 @@ import "core:time"
 
 ASSETS_PATH :: "assets";
 
+Flags :: enum {
+    Registered,
+}
+
 // Base structure for all assets to use
 Asset :: struct {
     path : string,
 
-    loaded  : bool,
-    loading : bool,
+    loaded  : bool, // Updated by atomics
+    loading : bool, // Updated by atomics
     
     last_write_time : time.Time,
+
+    flags : bit_set[Flags],
 
     derived : any,
 }
@@ -132,7 +138,7 @@ register_from_extension :: proc(ext: string) -> ^Type_Register {
 }
 
 discover :: proc() {
-    
+    if !os.exists(ASSETS_PATH) do os.make_directory(ASSETS_PATH, 0);
     
     walk_proc :: proc(info: os.File_Info, in_err: os.Errno) -> (err: os.Errno, skip_dir: bool) {
         using manager;
@@ -144,8 +150,10 @@ discover :: proc() {
         reg := register_from_extension(ext);
         if reg == nil do return os.ERROR_NONE, false;
 
-        path := strings.clone(rel_path);
-        assets[path] = reg.register(path, info.modification_time);
+        path        := strings.clone(rel_path);
+        asset       := reg.register(path, info.modification_time);
+        asset.flags |= { .Registered };
+        assets[path] = asset;
 
         return os.ERROR_NONE, false;
     }

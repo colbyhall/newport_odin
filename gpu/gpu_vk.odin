@@ -221,11 +221,13 @@ init_vulkan :: proc(window: ^core.Window) -> ^Device {
         assert(result == .SUCCESS);
     }
 
+    recreate_swapchain(device);
+
     return device;
 }
 
 // 
-// Device API
+// Swapchain API
 ////////////////////////////////////////////////////
 
 Swapchain :: struct {
@@ -336,6 +338,10 @@ recreate_swapchain :: proc(using device: ^Device) {
     swapchain = actual;
 }
 
+// 
+// Device API
+////////////////////////////////////////////////////
+
 Device :: struct {
     logical_gpu  : vk.Device,
     physical_gpu : vk.PhysicalDevice,
@@ -403,63 +409,8 @@ submit :: proc{ submit_multiple, submit_single };
 // }
 
 //
-// Context API
+// Buffer Pass API
 ////////////////////////////////////////////////////
-
-Context :: struct {
-    command_buffer : vk.CommandBuffer,
-    derived        : typeid,
-    device         : ^Device,
-}
-
-begin :: proc(using ctx: ^Context) {
-    result := vk.ResetCommandBuffer(command_buffer, {});
-    assert(result == .SUCCESS);
-
-    begin_info := vk.CommandBufferBeginInfo{
-        sType = .COMMAND_BUFFER_BEGIN_INFO,
-        flags = { .SIMULTANEOUS_USE },
-    };
-
-    result = vk.BeginCommandBuffer(command_buffer, &begin_info);
-    assert(result == .SUCCESS);
-}
-
-end :: proc(using ctx: ^Context) {
-    result := vk.EndCommandBuffer(command_buffer);
-    assert(result == .SUCCESS);
-}
-
-@(deferred_out=end)
-record :: proc(using ctx: ^Context) -> ^Context {
-    begin(ctx);
-    return ctx;
-}
-
-Graphics_Context :: Context;
-
-make_graphics_context :: proc(using device: ^Device) -> Graphics_Context {
-    alloc_info := vk.CommandBufferAllocateInfo{
-        sType               = .COMMAND_BUFFER_ALLOCATE_INFO,
-        commandPool         = graphics_command_pool,
-        level               = .PRIMARY,
-        commandBufferCount  = 1,
-    };
-
-    handle : vk.CommandBuffer;
-    result := vk.AllocateCommandBuffers(logical_gpu, &alloc_info, &handle);
-    assert(result == .SUCCESS);
-
-    return Graphics_Context{
-        command_buffer = handle,
-        derived        = typeid_of(Graphics_Context),
-        device         = device,
-    };
-}
-
-delete_graphics_context :: proc(using ctx: ^Graphics_Context) {
-    // UNIMPLEMENTED
-}
 
 Buffer :: struct {  
     handle : vk.Buffer,
@@ -546,6 +497,83 @@ delete_buffer :: proc(using buffer: ^Buffer) {
 
     handle = 0;
     memory = 0;
+}
+
+//
+// Texture API
+////////////////////////////////////////////////////
+
+// TODO: Mips
+Texture :: struct {
+    using asset : asset.Asset,
+
+    image  : vk.Image,
+    view   : vk.ImageView,
+    memory : vk.DeviceMemory,
+
+    format : Format,
+    width  : int,
+    heigth : int,
+    depth  : int,
+}
+
+//
+// Context API
+////////////////////////////////////////////////////
+
+Context :: struct {
+    command_buffer : vk.CommandBuffer,
+    derived        : typeid,
+    device         : ^Device,
+}
+
+begin :: proc(using ctx: ^Context) {
+    result := vk.ResetCommandBuffer(command_buffer, {});
+    assert(result == .SUCCESS);
+
+    begin_info := vk.CommandBufferBeginInfo{
+        sType = .COMMAND_BUFFER_BEGIN_INFO,
+        flags = { .SIMULTANEOUS_USE },
+    };
+
+    result = vk.BeginCommandBuffer(command_buffer, &begin_info);
+    assert(result == .SUCCESS);
+}
+
+end :: proc(using ctx: ^Context) {
+    result := vk.EndCommandBuffer(command_buffer);
+    assert(result == .SUCCESS);
+}
+
+@(deferred_out=end)
+record :: proc(using ctx: ^Context) -> ^Context {
+    begin(ctx);
+    return ctx;
+}
+
+Graphics_Context :: Context;
+
+make_graphics_context :: proc(using device: ^Device) -> Graphics_Context {
+    alloc_info := vk.CommandBufferAllocateInfo{
+        sType               = .COMMAND_BUFFER_ALLOCATE_INFO,
+        commandPool         = graphics_command_pool,
+        level               = .PRIMARY,
+        commandBufferCount  = 1,
+    };
+
+    handle : vk.CommandBuffer;
+    result := vk.AllocateCommandBuffers(logical_gpu, &alloc_info, &handle);
+    assert(result == .SUCCESS);
+
+    return Graphics_Context{
+        command_buffer = handle,
+        derived        = typeid_of(Graphics_Context),
+        device         = device,
+    };
+}
+
+delete_graphics_context :: proc(using ctx: ^Graphics_Context) {
+    // UNIMPLEMENTED
 }
 
 //
