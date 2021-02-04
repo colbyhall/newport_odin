@@ -3,11 +3,10 @@
 set BASE_PATH="%~dp0"
 cd %BASE_PATH%
 
-if not exist build mkdir build
-if not exist data mkdir data
+if not exist bin mkdir bin
 
-pushd build
+pushd bin
 
-call odin build ..\src\test.odin -collection:newport=..\..\ -debug
+call odin build ..\src\ -out:test.exe -collection:newport=..\..\ -define:USE_VULKAN=true -debug
 
 popd

@@ -82,6 +82,7 @@ init :: proc(details: Init_Details) {
 
     project_name = details.project_name;
 
+    // TODO: Should this be moved to the user code? This is making a decision about code structure 
     // Change directory to base project dir
     exe_path := core.exe_path();
     for i := len(exe_path) - 1; i > 0; i -= 1 {
@@ -139,10 +140,6 @@ is_running :: proc() -> bool {
 
 dispatch_input :: proc() {
     core.poll_events(&the_engine.window);
-}
-
-display :: proc() {
-    core.swap_window_buffer(&the_engine.window);
 }
 
 viewport :: proc() -> core.Rect {

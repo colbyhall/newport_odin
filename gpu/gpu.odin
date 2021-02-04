@@ -65,6 +65,10 @@ state : ^GPU_State;
 init :: proc(window: ^core.Window) -> ^Device {
     result := init_vulkan(window);
     init_shader_cache();
+
+    // Register assets
+    register_shader();
+
     return result;
 }
 
@@ -73,17 +77,12 @@ shutdown :: proc() {
     shutdown_shader_cache();
 }
 
-// Registers the asset types to the asset manager
-register_asset_types :: proc() {
-    register_shader();
-}
-
 // Returns the GPU state ptr casted to T
 get_casted :: proc($T: typeid) -> ^T {
     data, id := reflect.any_data(state.derived);
     if id != T do return nil;
 
-    return cast(T)data;
+    return cast(^T)data;
 }
 
 // Returns the GPU state ptr
@@ -180,16 +179,13 @@ Buffer_Description :: struct {
 // Render Pass API
 ////////////////////////////////////////////////////
 
-Attachment_Type :: enum {
-    Color,
-    Depth,
-    Backbuffer
+Attachment :: struct {
+    format: Format,
 }
 
-Attachment_Description :: struct {
-    format : Format,
-    type   : Attachment_Type,
-    clear  : bool,  
+Render_Pass_Description :: struct {
+    colors : []Attachment,
+    depth  : Maybe(Attachment),
 }
 
 // All supported types of shaders

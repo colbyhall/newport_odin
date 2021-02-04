@@ -132,6 +132,8 @@ register_from_extension :: proc(ext: string) -> ^Type_Register {
 }
 
 discover :: proc() {
+    
+    
     walk_proc :: proc(info: os.File_Info, in_err: os.Errno) -> (err: os.Errno, skip_dir: bool) {
         using manager;
         if info.is_dir do return os.ERROR_NONE, false;

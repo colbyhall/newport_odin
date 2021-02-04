@@ -231,10 +231,109 @@ init_vulkan :: proc(window: ^core.Window) -> ^Device {
 Swapchain :: struct {
     handle : vk.SwapchainKHR,
 
-    extent       : vk.Extent2D,
-    framebuffers : []Framebuffer,
+    extent : vk.Extent2D,
+    views  : []vk.ImageView,
+}
 
-    // render_pass : Render_Pass,
+@private
+recreate_swapchain :: proc(using device: ^Device) {
+    // Check if there is a valid swapchain and if so delete it
+    if swapchain != nil {
+        using actual := &swapchain.(Swapchain);
+
+        for it in views do vk.DestroyImageView(logical_gpu, it, nil);
+
+        delete(views);
+
+        // vk.DestroyRenderPass(logical_gpu, render_pass.handle, nil);
+        vk.DestroySwapchainKHR(logical_gpu, handle, nil);
+    }
+
+    using state := get(Vulkan_State);
+
+    capabilities : vk.SurfaceCapabilitiesKHR;
+    vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(physical_gpu, surface, &capabilities);
+
+    format_count : u32;
+    vk.GetPhysicalDeviceSurfaceFormatsKHR(physical_gpu, surface, &format_count, nil);
+
+    formats := make([]vk.SurfaceFormatKHR, int(format_count), context.temp_allocator);
+    vk.GetPhysicalDeviceSurfaceFormatsKHR(physical_gpu, surface, &format_count, &formats[0]);
+
+    format : ^vk.SurfaceFormatKHR;
+    for it in &formats {
+        if it.format == .B8G8R8A8_SRGB && it.colorSpace == .SRGB_NONLINEAR {
+            format = &it;
+            break;
+        }
+    }
+    assert(format != nil);
+
+    present_mode := vk.PresentModeKHR.FIFO;
+
+    queue_family_indices := [?]u32{
+        graphics_family_index,
+        surface_family_index,
+    };
+
+    create_info := vk.SwapchainCreateInfoKHR{
+        sType            = .SWAPCHAIN_CREATE_INFO_KHR,
+        surface          = surface,
+        minImageCount    = capabilities.minImageCount,
+        imageFormat      = format.format,
+        imageColorSpace  = format.colorSpace,
+        imageExtent      = capabilities.currentExtent,
+        imageArrayLayers = 1,
+        imageUsage       = { .COLOR_ATTACHMENT },
+        imageSharingMode = .CONCURRENT,
+
+        queueFamilyIndexCount = u32(len(queue_family_indices)),
+        pQueueFamilyIndices   = &queue_family_indices[0],
+
+        preTransform     = capabilities.currentTransform,
+        compositeAlpha   = { .OPAQUE },
+        presentMode      = present_mode,
+        clipped          = true,
+    };
+
+    using actual : Swapchain;
+
+    extent = capabilities.currentExtent;
+
+    result := vk.CreateSwapchainKHR(logical_gpu, &create_info, nil, &handle);
+    assert(result == .SUCCESS);
+
+    image_count : u32;
+    vk.GetSwapchainImagesKHR(logical_gpu, handle, &image_count, nil);
+
+    images := make([]vk.Image, int(image_count), context.temp_allocator);
+    vk.GetSwapchainImagesKHR(logical_gpu, handle, &image_count, &images[0]);
+
+    views = make([]vk.ImageView, int(image_count));
+
+    for _, i in images {
+        component_mapping := vk.ComponentMapping{ .IDENTITY, .IDENTITY, .IDENTITY, .IDENTITY };
+
+        subresource_range := vk.ImageSubresourceRange{
+            aspectMask = { .COLOR },
+            levelCount = 1,
+            layerCount = 1,
+        };
+
+        create_info := vk.ImageViewCreateInfo{
+            sType       = .IMAGE_VIEW_CREATE_INFO,
+            image       = images[i],
+            viewType    = .D2,
+            format      = .B8G8R8A8_SRGB,
+            components  = component_mapping,
+            subresourceRange = subresource_range,
+        };
+
+        result := vk.CreateImageView(logical_gpu, &create_info, nil, &views[i]);
+        assert(result == .SUCCESS);
+    }
+
+    swapchain = actual;
 }
 
 Device :: struct {
@@ -250,20 +349,22 @@ Device :: struct {
 
     // TODO: Think about job system and multi-threading
     graphics_command_pool : vk.CommandPool,
+
+    swapchain : Maybe(Swapchain),
 }
 
+// TODO: Setup Reciepts 
 submit_multiple :: proc(using device: ^Device, contexts: []^Context) {
     wait_stage : vk.PipelineStageFlags = { .COLOR_ATTACHMENT_OUTPUT };
 
+    buffers := make([]vk.CommandBuffer, len(contexts), context.temp_allocator);
+    for c, i in contexts do buffers[i] = c.command_buffer;
+
     submit_info := vk.SubmitInfo{
         sType                = .SUBMIT_INFO,
-        waitSemaphoreCount   = 1,
-        pWaitSemaphores      = &image_available_semaphore,
         pWaitDstStageMask    = &wait_stage,
         commandBufferCount   = u32(len(buffers)),
-        pCommandBuffers      = auto_cast &buffers[0],
-        // signalSemaphoreCount = 1,
-        // pSignalSemaphores    = &render_finished_semaphore,
+        pCommandBuffers      = &buffers[0],
     };
 
     vk.QueueSubmit(graphics_queue, 1, &submit_info, 0);
@@ -272,34 +373,34 @@ submit_multiple :: proc(using device: ^Device, contexts: []^Context) {
 
 submit_single :: proc(using device: ^Device, ctx: ^Context) {
     single := []^Context{ ctx };
-    submit_multiple(single);
+    submit_multiple(device, single);
 }
 
 submit :: proc{ submit_multiple, submit_single };
 
-display :: proc(using device: ^Device, framebuffer: ^Framebuffer) {
-    image_index : u32;
-    for it, i in swapchain.framebuffers {
-        if it.handle == framebuffer.handle {
-            image_index = u32(i);
-            break;
-        }
-    }
+// display :: proc(using device: ^Device, framebuffer: ^Framebuffer) {
+//     image_index : u32;
+//     for it, i in swapchain.framebuffers {
+//         if it.handle == framebuffer.handle {
+//             image_index = u32(i);
+//             break;
+//         }
+//     }
 
-    present_info := vk.PresentInfoKHR{
-        sType               = .PRESENT_INFO_KHR,
-        // waitSemaphoreCount  = 1,
-        // pWaitSemaphores     = &render_finished_semaphore,
-        swapchainCount      = 1,
-        pSwapchains         = &swapchain.handle,
-        pImageIndices       = &image_index,
-    };
+//     present_info := vk.PresentInfoKHR{
+//         sType               = .PRESENT_INFO_KHR,
+//         // waitSemaphoreCount  = 1,
+//         // pWaitSemaphores     = &render_finished_semaphore,
+//         swapchainCount      = 1,
+//         pSwapchains         = &swapchain.handle,
+//         pImageIndices       = &image_index,
+//     };
 
-    result := vk.QueuePresentKHR(presentation_queue, &present_info);
-    if result == .ERROR_OUT_OF_DATE_KHR || result == .SUBOPTIMAL_KHR do create_swap_chain();
+//     result := vk.QueuePresentKHR(presentation_queue, &present_info);
+//     if result == .ERROR_OUT_OF_DATE_KHR || result == .SUBOPTIMAL_KHR do create_swap_chain();
 
-    vk.QueueWaitIdle(presentation_queue);
-}
+//     vk.QueueWaitIdle(presentation_queue);
+// }
 
 //
 // Context API
@@ -330,19 +431,19 @@ end :: proc(using ctx: ^Context) {
 }
 
 @(deferred_out=end)
-record :: proc(using ctx: ^Context) -> return ^Context {
+record :: proc(using ctx: ^Context) -> ^Context {
     begin(ctx);
     return ctx;
 }
 
-Graphics_Context :: distinct Context;
+Graphics_Context :: Context;
 
 make_graphics_context :: proc(using device: ^Device) -> Graphics_Context {
     alloc_info := vk.CommandBufferAllocateInfo{
         sType               = .COMMAND_BUFFER_ALLOCATE_INFO,
         commandPool         = graphics_command_pool,
         level               = .PRIMARY,
-        commandBufferCount  = u32(len),
+        commandBufferCount  = 1,
     };
 
     handle : vk.CommandBuffer;
@@ -453,20 +554,20 @@ delete_buffer :: proc(using buffer: ^Buffer) {
 
 Render_Pass :: struct {
     handle : vk.RenderPass,
-    device : ^Device,
     desc   : Render_Pass_Description,
+
+    device : ^Device,
 }
 
-make_render_pass :: proc(using device: ^Device, attachments: []Attachment_Description) -> Render_Pass {
-    color_refs := make([dynamic]vk.AttachmentReference, 0, len(attachments), context.temp_allocator);
-    depth_refs : vk.AttachmentReference;
+make_render_pass :: proc(using device: ^Device, desc: Render_Pass_Description) -> Render_Pass {
+    color_refs := make([]vk.AttachmentReference, len(desc.colors), context.temp_allocator);
 
-    subpass := vk.SubpassDescription{
-        pipelineBindPoint = .GRAPHICS,
-    }
+    num_attachments := len(desc.colors);
+    if desc.depth != nil do num_attachments += 1;
 
-    vk_attachments := make([]vk.AttachmentDescription, len(attachments), context.temp_allocator);
-    for it, i in attachments {
+    attachments := make([]vk.AttachmentDescription, num_attachments, context.temp_allocator);
+
+    for it, i in desc.colors {
         format := vk_format(it.format);
 
         attachment := vk.AttachmentDescription{
@@ -480,46 +581,90 @@ make_render_pass :: proc(using device: ^Device, attachments: []Attachment_Descri
             stencilStoreOp = .DONT_CARE,
 
             initialLayout = .UNDEFINED,
+            finalLayout   = .SHADER_READ_ONLY_OPTIMAL,
         };
-
-        if clear_color do attachment.loadOp = .CLEAR;
-
-        switch it.type {
-        case .Color: attachment.finalLayout = .SHADER_READ_ONLY_OPTIMAL;
-        case .Depth: assert(false); // UNIMPLEMENTED
-        case .Backbuffer: attachment.finalLayout = .PRESENT_SRC_KHR;
-        }
+        attachments[i] = attachment;
 
         ref := vk.AttachmentReference{
             attachment = u32(i),
             layout     = .COLOR_ATTACHMENT_OPTIMAL,
         };
-
-        if it.type == .Depth {
-            ref.layout = .DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-            depth_refs = ref;
-            assert(subpass.pDepthStencilAttachment == nil);
-
-            subpass.pDepthStencilAttachment = &depth_refs;
-        } else do append(&color_refs, ref);
+        color_refs[i] = ref;
     }
 
-    subpass.colorAttachmentCount = u32(len(color_refs));
-    subpass.pColorAttachments = &color_refs[0];
+    // Currently we're only going to support 1 subpass as no other API has subpasses
+    subpass := vk.SubpassDescription{
+        pipelineBindPoint    = .GRAPHICS,
+        colorAttachmentCount = u32(len(color_refs)),
+        pColorAttachments    = &color_refs[0],
+    };
+
+    depth_refs : vk.AttachmentReference;
+    if desc.depth != nil {
+        depth := desc.depth.(Attachment);
+
+        format := vk_format(depth.format);
+
+        attachment := vk.AttachmentDescription{
+            format  = format,
+            samples = { ._1 },
+
+            loadOp  = .LOAD,
+            storeOp = .STORE,
+
+            stencilLoadOp  = .DONT_CARE,
+            stencilStoreOp = .DONT_CARE,
+
+            initialLayout = .UNDEFINED,
+            finalLayout   = .SHADER_READ_ONLY_OPTIMAL,
+        };
+        attachments[len(desc.colors)] = attachment;
+
+        depth_refs = vk.AttachmentReference{
+            attachment = u32(num_attachments),
+            layout     = .DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        };
+
+        subpass.pDepthStencilAttachment = &depth_refs;
+    }
+
+    stage_mask : vk.PipelineStageFlags;
+    access_mask : vk.AccessFlags;
+
+    if len(desc.colors) > 0 {
+        stage_mask |= { .COLOR_ATTACHMENT_OUTPUT };
+        access_mask |= { .COLOR_ATTACHMENT_WRITE };
+    }
+
+    if desc.depth != nil {
+        stage_mask |= { .EARLY_FRAGMENT_TESTS };
+        access_mask |= { .DEPTH_STENCIL_ATTACHMENT_WRITE };
+    }
 
     dependency := vk.SubpassDependency{
-
+        srcSubpass = vk.SUBPASS_EXTERNAL,
+        srcStageMask = stage_mask,
+        dstStageMask = stage_mask,
+        dstAccessMask = access_mask,
     };
 
     create_info := vk.RenderPassCreateInfo{
         sType           = .RENDER_PASS_CREATE_INFO,
-        attachmentCount = u32(len(vk_attachments)),
-        pAttachments    = &vk_attachments[0],
+        attachmentCount = u32(num_attachments),
+        pAttachments    = &attachments[0],
         subpassCount    = 1,
         pSubpasses      = &subpass,
         dependencyCount = 1,
         pDependencies   = &dependency,
+    };
+
+    handle : vk.RenderPass;
+    result := vk.CreateRenderPass(logical_gpu, &create_info, nil, &handle);
+    assert(result == .SUCCESS);
+    return Render_Pass{
+        handle = handle,
+        desc   = desc,
+        device = device,
     };
 }
 
