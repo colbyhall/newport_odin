@@ -232,9 +232,10 @@ init_vulkan :: proc(window: ^core.Window) -> ^Device {
 
 Swapchain :: struct {
     handle : vk.SwapchainKHR,
-
     extent : vk.Extent2D,
-    views  : []vk.ImageView,
+
+    backbuffers : []^Texture,
+    current     : int,
 }
 
 @private
@@ -243,24 +244,28 @@ recreate_swapchain :: proc(using device: ^Device) {
     if swapchain != nil {
         using actual := &swapchain.(Swapchain);
 
-        for it in views do vk.DestroyImageView(logical_gpu, it, nil);
+        for it in backbuffers {
+            vk.DestroyImageView(logical_gpu, it.view, nil);
+            free(it);
+        }
 
-        delete(views);
+        delete(backbuffers);
 
         // vk.DestroyRenderPass(logical_gpu, render_pass.handle, nil);
         vk.DestroySwapchainKHR(logical_gpu, handle, nil);
     }
 
-    using state := get(Vulkan_State);
+    state := get(Vulkan_State);
 
+    // Find the best surface format based on our specs
     capabilities : vk.SurfaceCapabilitiesKHR;
-    vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(physical_gpu, surface, &capabilities);
+    vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(physical_gpu, state.surface, &capabilities);
 
     format_count : u32;
-    vk.GetPhysicalDeviceSurfaceFormatsKHR(physical_gpu, surface, &format_count, nil);
+    vk.GetPhysicalDeviceSurfaceFormatsKHR(physical_gpu, state.surface, &format_count, nil);
 
     formats := make([]vk.SurfaceFormatKHR, int(format_count), context.temp_allocator);
-    vk.GetPhysicalDeviceSurfaceFormatsKHR(physical_gpu, surface, &format_count, &formats[0]);
+    vk.GetPhysicalDeviceSurfaceFormatsKHR(physical_gpu, state.surface, &format_count, &formats[0]);
 
     format : ^vk.SurfaceFormatKHR;
     for it in &formats {
@@ -278,9 +283,12 @@ recreate_swapchain :: proc(using device: ^Device) {
         surface_family_index,
     };
 
+    using actual : Swapchain;
+
+    // Make the swapchain object
     create_info := vk.SwapchainCreateInfoKHR{
         sType            = .SWAPCHAIN_CREATE_INFO_KHR,
-        surface          = surface,
+        surface          = state.surface,
         minImageCount    = capabilities.minImageCount,
         imageFormat      = format.format,
         imageColorSpace  = format.colorSpace,
@@ -298,22 +306,20 @@ recreate_swapchain :: proc(using device: ^Device) {
         clipped          = true,
     };
 
-    using actual : Swapchain;
-
-    extent = capabilities.currentExtent;
-
     result := vk.CreateSwapchainKHR(logical_gpu, &create_info, nil, &handle);
     assert(result == .SUCCESS);
 
+    extent = capabilities.currentExtent;
+
+    // Gather the swapchain created images
     image_count : u32;
     vk.GetSwapchainImagesKHR(logical_gpu, handle, &image_count, nil);
-
     images := make([]vk.Image, int(image_count), context.temp_allocator);
     vk.GetSwapchainImagesKHR(logical_gpu, handle, &image_count, &images[0]);
 
-    views = make([]vk.ImageView, int(image_count));
-
-    for _, i in images {
+    // Fill out the back buffer textures
+    backbuffers = make([]^Texture, int(image_count));
+    for it, i in images {
         component_mapping := vk.ComponentMapping{ .IDENTITY, .IDENTITY, .IDENTITY, .IDENTITY };
 
         subresource_range := vk.ImageSubresourceRange{
@@ -331,8 +337,19 @@ recreate_swapchain :: proc(using device: ^Device) {
             subresourceRange = subresource_range,
         };
 
-        result := vk.CreateImageView(logical_gpu, &create_info, nil, &views[i]);
+        view : vk.ImageView;
+        result := vk.CreateImageView(logical_gpu, &create_info, nil, &view);
         assert(result == .SUCCESS);
+
+        backbuffer := new(Texture);
+        backbuffer.width  = int(extent.width);
+        backbuffer.height = int(extent.height);
+        backbuffer.depth  = 1;
+        backbuffer.format = .BGR_U8_SRGB;
+        backbuffer.image  = it;
+        backbuffer.view   = view;
+
+        backbuffers[i] = backbuffer;
     }
 
     swapchain = actual;
@@ -384,29 +401,27 @@ submit_single :: proc(using device: ^Device, ctx: ^Context) {
 
 submit :: proc{ submit_multiple, submit_single };
 
-// display :: proc(using device: ^Device, framebuffer: ^Framebuffer) {
-//     image_index : u32;
-//     for it, i in swapchain.framebuffers {
-//         if it.handle == framebuffer.handle {
-//             image_index = u32(i);
-//             break;
-//         }
-//     }
+display :: proc(using device: ^Device) {
+    if swapchain == nil do recreate_swapchain(device);
+    actual := swapchain.(Swapchain);
 
-//     present_info := vk.PresentInfoKHR{
-//         sType               = .PRESENT_INFO_KHR,
-//         // waitSemaphoreCount  = 1,
-//         // pWaitSemaphores     = &render_finished_semaphore,
-//         swapchainCount      = 1,
-//         pSwapchains         = &swapchain.handle,
-//         pImageIndices       = &image_index,
-//     };
+    index := u32(actual.current);
 
-//     result := vk.QueuePresentKHR(presentation_queue, &present_info);
-//     if result == .ERROR_OUT_OF_DATE_KHR || result == .SUBOPTIMAL_KHR do create_swap_chain();
+    present_info := vk.PresentInfoKHR{
+        sType               = .PRESENT_INFO_KHR,
+        swapchainCount      = 1,
+        pSwapchains         = &actual.handle,
+        pImageIndices       = &index,
+    };
 
-//     vk.QueueWaitIdle(presentation_queue);
-// }
+    actual.current = (actual.current + 1) % len(actual.backbuffers);
+
+    result := vk.QueuePresentKHR(presentation_queue, &present_info);
+    if result == .ERROR_OUT_OF_DATE_KHR || result == .SUBOPTIMAL_KHR do recreate_swapchain(device);
+
+    // TODO: Reciept system
+    vk.QueueWaitIdle(presentation_queue);
+}
 
 //
 // Buffer Pass API
@@ -513,7 +528,7 @@ Texture :: struct {
 
     format : Format,
     width  : int,
-    heigth : int,
+    height : int,
     depth  : int,
 }
 
