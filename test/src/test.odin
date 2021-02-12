@@ -17,15 +17,6 @@ cross :: core.cross;
 norm :: core.norm;
 length :: core.length;
 
-// ax + bx + dx = w
-Plane :: core.Vector4;
-
-plane_dot :: proc(a: Plane, b: Vector3) -> f32 {
-    return a.x * b.x + a.y * b.y + a.z * b.z - a.w;
-}
-
-// ray_plane_intersection :: proc(origin, dir: Vector3, p: Plane) -> 
-
 main :: proc() {
     // Setup the engine
     init_details := engine.default_init_details();
@@ -35,28 +26,17 @@ main :: proc() {
 
     the_engine := engine.get();
 
-    a := v3(10, 43, 5);
-    b := v3(23, -123, 234);
-    c := v3(234, 13, 23);
-
-    ab := b - a;
-    bc := c - b;
-
-    d := norm(cross(ab, bc));
-    w := dot(a, d);
-
-    p := Plane{ d.x, d.y, d.z, w };
-    fmt.println(p, plane_dot(p, d * w));
+    job.init_scoped();
 
     // Setup all the gpu stuff including the 
-    // device := gpu.init(&the_engine.window);
-    // defer gpu.shutdown();
+    device := gpu.init(&the_engine.window);
+    defer gpu.shutdown();
 
-    // asset.discover();
+    asset.discover();
 
-    // core.show_window(&the_engine.window, true);
+    core.show_window(&the_engine.window, true);
 
-    // for engine.is_running() {
-    //     engine.dispatch_input();
-    // }
+    for engine.is_running() {
+        engine.dispatch_input();
+    }
 }

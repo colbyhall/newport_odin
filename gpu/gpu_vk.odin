@@ -236,6 +236,8 @@ Swapchain :: struct {
 
     backbuffers : []^Texture,
     current     : int,
+
+    render_pass : Render_Pass,
 }
 
 @private
@@ -540,6 +542,8 @@ Context :: struct {
     command_buffer : vk.CommandBuffer,
     derived        : typeid,
     device         : ^Device,
+
+    framebuffers   : [dynamic]vk.Framebuffer,
 }
 
 begin :: proc(using ctx: ^Context) {
@@ -589,6 +593,96 @@ make_graphics_context :: proc(using device: ^Device) -> Graphics_Context {
 
 delete_graphics_context :: proc(using ctx: ^Graphics_Context) {
     // UNIMPLEMENTED
+}
+
+begin_render_pass :: proc(using ctx: ^Context, render_pass: ^Render_Pass, attachments: []^Texture) {
+    extent := vk.Extent2D{
+        width  = u32(attachments[0].width),
+        height = u32(attachments[0].height)
+    };
+
+    render_area := vk.Rect2D{ extent = extent };
+
+    // Make the framebuffer
+    framebuffer : vk.Framebuffer;
+    {
+        vk_attachments := make([]vk.ImageView, len(attachments), context.temp_allocator);
+        for it, i in attachments do vk_attachments[i] = it.view;
+
+        create_info := vk.FramebufferCreateInfo{
+            sType           = .FRAMEBUFFER_CREATE_INFO,
+            renderPass      = render_pass.handle,
+            attachmentCount = u32(len(attachments)),
+            pAttachments    = &vk_attachments[0],
+            width           = extent.width,
+            height          = extent.height,
+            layers          = 1,
+        };
+
+        result := vk.CreateFramebuffer(device.logical_gpu, &create_info, nil, &framebuffer);
+        assert(result == .SUCCESS);
+    }
+
+    // Append framebuffer to framebuffers
+    append(&framebuffers, framebuffer);
+
+    begin_info := vk.RenderPassBeginInfo{
+        sType           = .RENDER_PASS_BEGIN_INFO,
+        renderPass      = render_pass.handle,
+        framebuffer     = framebuffer,
+        renderArea      = render_area,
+    };
+
+    vk.CmdBeginRenderPass(command_buffer, &begin_info, .INLINE);
+}
+
+end_render_pass :: proc(using ctx: ^Context) {
+    vk.CmdEndRenderPass(command_buffer);
+}
+
+@(deferred_out=end_render_pass)
+render_pass_scope :: proc(using ctx: ^Context, render_pass: ^Render_Pass, attachments: []^Texture) -> ^Context {
+    begin_render_pass(ctx, render_pass, attachments);
+    return ctx;
+}
+
+bind_pipeline :: proc(using ctx: ^Context, pipeline: ^Pipeline, viewport: Vector2, scissor: Maybe(Rect) = nil) {
+    vk.CmdBindPipeline(command_buffer, .GRAPHICS, pipeline.handle);
+
+    vk_viewport := vk.Viewport{
+        width    = viewport.x,
+        height   = viewport.y,
+        maxDepth = 1,
+    };
+    vk.CmdSetViewport(command_buffer, 0, 1, &vk_viewport);
+    if scissor == nil {
+        rect : vk.Rect2D;
+        rect.extent.width = u32(viewport.x);
+        rect.extent.height = u32(viewport.y);
+        vk.CmdSetScissor(command_buffer, 0, 1, &rect);
+    } else {
+        scissor := scissor.(Rect);
+
+        _, size := rect_pos_size(scissor);
+
+        rect : vk.Rect2D;
+        rect.offset.x = i32(scissor.min.x);
+        rect.offset.y = i32(scissor.min.y);
+        rect.extent.width  = u32(size.x);
+        rect.extent.height = u32(size.y);
+        vk.CmdSetScissor(command_buffer, 0, 1, &rect);
+    }
+}
+
+bind_vertex_buffer :: proc(using ctx: ^Context, b: Buffer) {
+    b := b;
+
+    offset : vk.DeviceSize;
+    vk.CmdBindVertexBuffers(command_buffer, 0, 1, &b.handle, &offset);
+}
+
+draw :: proc(using ctx: ^Context, auto_cast vertex_count: int, auto_cast first_vertex := 0) {
+    vk.CmdDraw(command_buffer, u32(vertex_count), 1, u32(first_vertex), 0);
 }
 
 //
@@ -722,21 +816,250 @@ Shader :: struct {
     module : vk.ShaderModule,
 }
 
-init_shader :: proc(using s: ^Shader, contents: []byte) {
-    // check();
+init_shader :: proc(using device: ^Device, shader: ^Shader, contents: []byte) {
+    create_info := vk.ShaderModuleCreateInfo{
+        sType    = .SHADER_MODULE_CREATE_INFO,
+        codeSize = len(contents),
+        pCode    = cast(^u32)&contents[0],
+    };
 
-    // create_info := vk.ShaderModuleCreateInfo{
-    //     sType    = .SHADER_MODULE_CREATE_INFO,
-    //     codeSize = len(contents),
-    //     pCode    = cast(^u32)&contents[0],
-    // };
-
-    // using state := get(Vulkan_Graphics);
-
-    // result := vk.CreateShaderModule(logical_gpu, &create_info, nil, &module);
-    // assert(result == .SUCCESS);
+    result := vk.CreateShaderModule(logical_gpu, &create_info, nil, &shader.module);
+    assert(result == .SUCCESS);
 }
 
+Pipeline :: struct {
+    handle : vk.Pipeline,
+    layout : vk.PipelineLayout,
+
+    description : Pipeline_Description,
+}
+
+make_graphics_pipeline :: proc(using device: ^Device, using description: Pipeline_Description) -> Pipeline {
+    assert(len(shaders) > 0);
+
+    // Setup all the shader stages and load into a buffer
+    shader_stages := make([]vk.PipelineShaderStageCreateInfo, len(shaders), context.temp_allocator);
+    for it, i in shaders {
+        if it == nil do continue;
+        assert(it.loaded);
+
+        stage : vk.ShaderStageFlag;
+        switch it.type {
+        case .Vertex:   stage = .VERTEX;
+        case .Pixel: stage = .FRAGMENT;
+        }
+
+        stage_info := vk.PipelineShaderStageCreateInfo{
+            sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
+            stage  = { stage },
+            module = it.module,
+            pName  = "main",
+        };
+
+        shader_stages[i] = stage_info;
+    }
+
+    // Do the vertex input stuff
+    binding := vk.VertexInputBindingDescription{
+        binding   = 0,
+        stride    = u32(reflect.size_of_typeid(description.vertex)),
+        inputRate = .VERTEX,
+    };
+
+    attributes := make([dynamic]vk.VertexInputAttributeDescription, 0, 12, context.temp_allocator);
+    {
+        using reflect;
+
+        type_info := type_info_base(type_info_of(description.vertex));
+        struct_info, ok := type_info.variant.(Type_Info_Struct);
+        assert(ok); // Vertex must be a struct
+
+        for it, i in struct_info.types {
+            desc := vk.VertexInputAttributeDescription{
+                binding  = 0,
+                location = u32(i),
+                offset   = u32(struct_info.offsets[i]),
+            };
+
+            switch it.id {
+            case i32:           desc.format = .R32_SINT;
+            case f32:           desc.format = .R32_SFLOAT;
+            case Vector2:       desc.format = .R32G32_SFLOAT;
+            case Vector3:       desc.format = .R32G32B32_SFLOAT;
+            case Vector4:       desc.format = .R32G32B32A32_SFLOAT;
+            case Linear_Color:  desc.format = .R32G32B32A32_SFLOAT;
+            case:               assert(false);
+            }
+
+            append(&attributes, desc);
+        }
+    }
+
+    vertex_input_state := vk.PipelineVertexInputStateCreateInfo{
+        sType                           = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        vertexBindingDescriptionCount   = 1,
+        pVertexBindingDescriptions      = &binding,
+        vertexAttributeDescriptionCount = u32(len(attributes)),
+        pVertexAttributeDescriptions    = &attributes[0],
+    };  
+
+    input_assembly_state := vk.PipelineInputAssemblyStateCreateInfo{
+        sType    = .PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        topology = .TRIANGLE_LIST,
+    };
+
+    actual := swapchain.(Swapchain);
+    vk_viewport := vk.Viewport{
+        width    = f32(actual.extent.width),
+        height   = f32(actual.extent.height),
+        maxDepth = 1,
+    };
+
+    vk_scissor := vk.Rect2D{
+        extent = actual.extent,
+    };
+
+    viewport_state := vk.PipelineViewportStateCreateInfo{
+        sType           = .PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        viewportCount   = 1,
+        pViewports      = &vk_viewport,
+        scissorCount    = 1,
+        pScissors       = &vk_scissor,
+    };
+
+    polygon_mode : vk.PolygonMode;
+    switch draw_mode {
+    case .Fill:  polygon_mode = .FILL;
+    case .Line:  polygon_mode = .LINE;
+    case .Point: polygon_mode = .POINT;
+    }
+
+    cull : vk.CullModeFlags;
+    if .Front in cull_mode do cull |= { .FRONT };
+    if .Back in cull_mode do cull |= { .BACK };
+
+    // NOTE: Depth Testing goes around here somewhere
+    rasterizer_state := vk.PipelineRasterizationStateCreateInfo{
+        sType       = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        polygonMode = polygon_mode,
+        cullMode    = cull,
+        frontFace   = .CLOCKWISE,
+        lineWidth   = line_width,
+    };
+
+    multisample_state := vk.PipelineMultisampleStateCreateInfo{
+        sType                   = .PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        rasterizationSamples    = { ._1 },
+        minSampleShading        = 1.0,
+    };
+
+    // Setting up blending and converting data types
+    vk_blend_factor :: proc(fc: Blend_Factor) -> vk.BlendFactor{
+        switch fc {
+        case .Zero: return .ZERO;
+        case .One:  return .ONE;
+        case .Src_Color: return .SRC_COLOR;
+        case .One_Minus_Src_Color: return .ONE_MINUS_SRC_COLOR;
+        case .Dst_Color: return .DST_COLOR;
+        case .One_Minus_Dst_Color: return .ONE_MINUS_DST_COLOR;
+        case .Src_Alpha: return .SRC_ALPHA;
+        case .One_Minus_Src_Alpha: return .ONE_MINUS_SRC_ALPHA;
+        }
+
+        return .ZERO;
+    }
+
+    vk_blend_op :: proc(a: Blend_Op) -> vk.BlendOp{
+        switch a {
+        case .Add: return .ADD;
+        case .Subtract: return .SUBTRACT;
+        case .Reverse_Subtract: return .REVERSE_SUBTRACT;
+        case .Min: return .MIN;
+        case .Max: return .MAX;
+        }
+
+        return .ADD;
+    }
+
+    color_write_mask : vk.ColorComponentFlags;
+    if .Red   in color_mask do color_write_mask |= { .R };
+    if .Green in color_mask do color_write_mask |= { .G };
+    if .Blue  in color_mask do color_write_mask |= { .B };
+    if .Alpha in color_mask do color_write_mask |= { .A };
+
+    color_blend_attachment := vk.PipelineColorBlendAttachmentState{
+        blendEnable = b32(blend_enabled),
+        srcColorBlendFactor = vk_blend_factor(src_color_blend_factor),
+        dstColorBlendFactor = vk_blend_factor(dst_color_blend_factor),
+        colorBlendOp = vk_blend_op(color_blend_op),
+
+        srcAlphaBlendFactor = vk_blend_factor(src_alpha_blend_factor),
+        dstAlphaBlendFactor = vk_blend_factor(dst_alpha_blend_factor),
+        alphaBlendOp = vk_blend_op(alpha_blend_op),
+        colorWriteMask = color_write_mask,
+    };
+
+    color_blend_state := vk.PipelineColorBlendStateCreateInfo{
+        sType           = .PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        logicOp         = .COPY,
+        attachmentCount = 1,
+        pAttachments    = &color_blend_attachment,
+    };
+
+    // Creating the dynamic states
+    dynamic_states := [?]vk.DynamicState {
+        .VIEWPORT,
+        .SCISSOR,
+    };
+
+    dynamic_state := vk.PipelineDynamicStateCreateInfo{
+        sType               = .PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        dynamicStateCount   = u32(len(dynamic_states)),
+        pDynamicStates      = &dynamic_states[0],
+    };
+
+    // TODO(colby): Look into what a pipeline layout is and why
+    pipeline_layout_info := vk.PipelineLayoutCreateInfo{
+        sType          = .PIPELINE_LAYOUT_CREATE_INFO,
+        // setLayoutCount = 1,
+        // pSetLayouts    = &set_layout,
+    };
+
+    layout : vk.PipelineLayout;
+    result := vk.CreatePipelineLayout(logical_gpu, &pipeline_layout_info, nil, &layout);
+    assert(result == .SUCCESS);
+
+    create_info := vk.GraphicsPipelineCreateInfo{
+        sType               = .GRAPHICS_PIPELINE_CREATE_INFO,
+        stageCount          = u32(len(shader_stages)),
+        pStages             = &shader_stages[0],
+        pVertexInputState   = &vertex_input_state,
+        pInputAssemblyState = &input_assembly_state,
+        pViewportState      = &viewport_state,
+        pRasterizationState = &rasterizer_state,
+        pMultisampleState   = &multisample_state,
+        pColorBlendState    = &color_blend_state,
+        pDynamicState       = &dynamic_state,
+        layout              = layout,
+        renderPass          = render_pass.handle,
+        subpass             = 0,
+        basePipelineIndex   = -1,
+    };
+
+    // TODO(colby): Look into pipeline caches
+    handle : vk.Pipeline;
+    result = vk.CreateGraphicsPipelines(logical_gpu, 0, 1, &create_info, nil, &handle);
+    assert(result == .SUCCESS);
+
+    return Pipeline{ 
+        description = description, 
+        handle      = handle, 
+        
+        layout      = layout,
+    };
+}
+
+make_pipeline :: proc{ make_graphics_pipeline };
 
 
 }

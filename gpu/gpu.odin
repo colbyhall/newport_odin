@@ -298,10 +298,9 @@ Color_Mask :: enum {
 // Each underlying API has a different way of doing pipelines. So we want to abstract it out
 Pipeline_Description :: struct {
     shaders : []^Shader,
-    vertex : typeid,
 
-    // render_pass   : ^Render_Pass,
-    subpass_index : int,
+    vertex : typeid,
+    render_pass   : ^Render_Pass,
 
     viewport : Rect,
     scissor  : Rect,
@@ -328,9 +327,9 @@ Pipeline_Description :: struct {
     depth_compare : Compare_Op,
 }
 
-default_pipeline_description :: proc(/* render_pass: ^Render_Pass */) -> Pipeline_Description {
+default_pipeline_description :: proc(render_pass: ^Render_Pass) -> Pipeline_Description {
     return Pipeline_Description{
-        // render_pass = render_pass,
+        render_pass = render_pass,
         
         draw_mode  = .Fill,
         line_width = 1.0,

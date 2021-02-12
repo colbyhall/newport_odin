@@ -289,7 +289,7 @@ register_shader :: proc() {
             if !success do return false;
         }
 
-        init_shader(shader, contents);
+        init_shader(get().current, shader, contents);
 
         return true;
     }
