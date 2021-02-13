@@ -17,6 +17,29 @@ cross :: core.cross;
 norm :: core.norm;
 length :: core.length;
 
+// ax + bx + dx = w
+Plane :: core.Vector4;
+
+plane_dot :: proc(a: Plane, b: Vector3) -> f32 {
+    return a.x * b.x + a.y * b.y + a.z * b.z - a.w;
+}
+
+ray_plane_intersection :: proc(origin, dir: Vector3, p: Plane) -> (impact: Vector3, hit: bool) {
+    pn := v3(p.x, p.y, p.z);
+    pd := plane_dot(p, origin);
+
+    if pd > 1e-6 {
+        hit = dot(pn, dir) < 0;
+        if hit do impact = origin + dir * pd;
+        return;
+    }
+
+    hit = true;
+    impact = origin + pn * -pd;
+
+    return;
+}
+
 main :: proc() {
     // Setup the engine
     init_details := engine.default_init_details();
