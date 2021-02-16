@@ -327,9 +327,12 @@ Pipeline_Description :: struct {
     depth_compare : Compare_Op,
 }
 
-default_pipeline_description :: proc(render_pass: ^Render_Pass) -> Pipeline_Description {
+make_pipeline_description_graphics :: proc(render_pass: ^Render_Pass, vertex: typeid, shaders: []^Shader) -> Pipeline_Description {
     return Pipeline_Description{
         render_pass = render_pass,
+
+        vertex = vertex,
+        shaders = shaders,
         
         draw_mode  = .Fill,
         line_width = 1.0,
@@ -354,9 +357,23 @@ default_pipeline_description :: proc(render_pass: ^Render_Pass) -> Pipeline_Desc
     };
 }
 
+make_pipeline_description :: proc{ make_pipeline_description_graphics };
+
 Command_Allocator_Type :: enum {
     Graphics,
 }
+
+Texture_Layout :: enum {
+    Undefined,
+    General,
+    Color_Attachment,
+    Depth_Attachment,
+    Transfer_Src,
+    Transfer_Dst,
+    Shader_Read_Only,
+    Present,
+}
+
 
 // Texture2d_Shared :: struct {
 //     using asset : asset.Asset,

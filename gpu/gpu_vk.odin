@@ -38,7 +38,7 @@ vk_format :: proc (format: Format) -> vk.Format {
     case .Undefined:    return .UNDEFINED;
     }
 
-    return .UNDEFINED;
+    unimplemented();
 }
 
 init_vulkan :: proc(window: ^core.Window) -> ^Device {
@@ -47,6 +47,8 @@ init_vulkan :: proc(window: ^core.Window) -> ^Device {
 
     device := new(Device);
     vulkan_state.current = device;
+
+    state = vulkan_state;
 
     // Load all the function ptrs from the dll
     {
@@ -236,8 +238,6 @@ Swapchain :: struct {
 
     backbuffers : []^Texture,
     current     : int,
-
-    render_pass : Render_Pass,
 }
 
 @private
@@ -378,6 +378,22 @@ Device :: struct {
     swapchain : Maybe(Swapchain),
 }
 
+backbuffer :: proc(using device: ^Device) -> ^Texture {
+    actual := &swapchain.(Swapchain);
+
+    image_index : u32;
+
+    result := vk.AcquireNextImageKHR(logical_gpu, actual.handle, (1 << 64 - 1), 0, 0, &image_index);
+    if result == .ERROR_OUT_OF_DATE_KHR || result == .SUBOPTIMAL_KHR {
+        recreate_swapchain(device);
+        vk.AcquireNextImageKHR(logical_gpu, actual.handle, (1 << 64 - 1), 0, 0, &image_index);
+    }
+
+    actual.current = int(image_index);
+
+    return actual.backbuffers[actual.current];
+}
+
 // TODO: Setup Reciepts 
 submit_multiple :: proc(using device: ^Device, contexts: []^Context) {
     wait_stage : vk.PipelineStageFlags = { .COLOR_ATTACHMENT_OUTPUT };
@@ -415,8 +431,6 @@ display :: proc(using device: ^Device) {
         pSwapchains         = &actual.handle,
         pImageIndices       = &index,
     };
-
-    actual.current = (actual.current + 1) % len(actual.backbuffers);
 
     result := vk.QueuePresentKHR(presentation_queue, &present_info);
     if result == .ERROR_OUT_OF_DATE_KHR || result == .SUBOPTIMAL_KHR do recreate_swapchain(device);
@@ -516,6 +530,15 @@ delete_buffer :: proc(using buffer: ^Buffer) {
     memory = 0;
 }
 
+copy_to_buffer :: proc(using dst: ^Buffer, src: []$E) {
+    assert(len(src) * size_of(E) == desc.size);
+
+    data: rawptr;
+    vk.MapMemory(device.logical_gpu, memory, 0, vk.DeviceSize(desc.size), {}, &data);
+    mem.copy(data, &src[0], desc.size);
+    vk.UnmapMemory(device.logical_gpu, memory);
+}
+
 //
 // Texture API
 ////////////////////////////////////////////////////
@@ -569,6 +592,67 @@ record :: proc(using ctx: ^Context) -> ^Context {
     begin(ctx);
     return ctx;
 }
+
+@private
+texture_layout_to_image_layout :: proc(layout: Texture_Layout) -> vk.ImageLayout {
+    switch layout {
+    case .Undefined: return .UNDEFINED;
+    case .General: return .GENERAL;
+    case .Color_Attachment: return .COLOR_ATTACHMENT_OPTIMAL;
+    case .Depth_Attachment: return .DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    case .Transfer_Src: return .TRANSFER_SRC_OPTIMAL;
+    case .Transfer_Dst: return .TRANSFER_DST_OPTIMAL;
+    case .Shader_Read_Only: return .SHADER_READ_ONLY_OPTIMAL;
+    case .Present: return .PRESENT_SRC_KHR;
+    }
+
+    panic("Unsupported layout");
+}
+
+resource_barrier_texture :: proc(using ctx: ^Context, texture: ^Texture, old_layout, new_layout: Texture_Layout) {
+    old_layout := texture_layout_to_image_layout(old_layout);
+    new_layout := texture_layout_to_image_layout(new_layout);
+
+    barrier := vk.ImageMemoryBarrier{
+        sType       = .IMAGE_MEMORY_BARRIER,
+        oldLayout   = old_layout,
+        newLayout   = new_layout,
+        image       = texture.image,
+
+        srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
+        dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
+    };
+
+    // TODO: Mips
+    barrier.subresourceRange.aspectMask     = { .COLOR };
+    barrier.subresourceRange.baseMipLevel   = 0;
+    barrier.subresourceRange.levelCount     = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount     = 1;
+
+    src_stage : vk.PipelineStageFlag;
+    dst_stage : vk.PipelineStageFlag;
+
+    if old_layout == .UNDEFINED && new_layout == .TRANSFER_DST_OPTIMAL {
+        barrier.dstAccessMask = { .TRANSFER_WRITE };
+        src_stage = .TOP_OF_PIPE;
+        dst_stage = .TRANSFER;
+    } else if old_layout == .TRANSFER_DST_OPTIMAL && new_layout == .SHADER_READ_ONLY_OPTIMAL {
+        barrier.srcAccessMask = { .TRANSFER_WRITE };
+        barrier.dstAccessMask = { .SHADER_READ };
+
+        src_stage = .TRANSFER;
+        dst_stage = .FRAGMENT_SHADER;
+    } else if old_layout == .COLOR_ATTACHMENT_OPTIMAL && new_layout == .PRESENT_SRC_KHR {
+        src_stage = .BOTTOM_OF_PIPE;
+        dst_stage = .BOTTOM_OF_PIPE;
+    } else do panic("Unsupported layout transition");
+
+    dep_flags : vk.DependencyFlags;
+    vk.CmdPipelineBarrier(command_buffer, { src_stage }, { dst_stage }, dep_flags, 0, nil, 0, nil, 1, &barrier);
+}
+
+resource_barrier :: proc{ resource_barrier_texture };
 
 Graphics_Context :: Context;
 
@@ -718,7 +802,7 @@ make_render_pass :: proc(using device: ^Device, desc: Render_Pass_Description) -
             stencilStoreOp = .DONT_CARE,
 
             initialLayout = .UNDEFINED,
-            finalLayout   = .SHADER_READ_ONLY_OPTIMAL,
+            finalLayout   = .PRESENT_SRC_KHR,
         };
         attachments[i] = attachment;
 
@@ -753,7 +837,7 @@ make_render_pass :: proc(using device: ^Device, desc: Render_Pass_Description) -
             stencilStoreOp = .DONT_CARE,
 
             initialLayout = .UNDEFINED,
-            finalLayout   = .SHADER_READ_ONLY_OPTIMAL,
+            finalLayout   = .DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         };
         attachments[len(desc.colors)] = attachment;
 
