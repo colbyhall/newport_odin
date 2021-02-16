@@ -21,40 +21,118 @@ package example
 import "newport:core"
 import "newport:engine"
 import "newport:asset"
-import "newport:job"
+import "newport:gpu"
 
-import "core:fmt"
+Vertex :: struct {
+    position : core.Vector3,
+    color    : core.Linear_Color,
+}
 
 main :: proc() {
-    init_details := engine.default_init_details("test");
-    engine.init_scoped(init_details);
+    // Setup the engine
+    init_details := engine.default_init_details();
+    engine.init_scoped(init_details);   
 
     context = engine.default_context();
 
+    the_engine := engine.get();
+
+    // Setup all the gpu stuff including the 
+    device := gpu.init(&the_engine.window);
+    defer gpu.shutdown();
+    
     asset.discover();
 
-    job.init_scoped();
+    // Make render pass
+    render_pass : gpu.Render_Pass;
+    {
+        swapchain := device.swapchain.(gpu.Swapchain);
+        format := swapchain.backbuffers[0].format;
 
-    core.show_window(engine.get().window, true);
+        color := gpu.Attachment{ format = format };
+
+        desc := gpu.Render_Pass_Description{
+            colors = []gpu.Attachment{ color },
+        };
+
+        render_pass = gpu.make_render_pass(device, desc);
+    }
+
+    // Make graphics pipeline
+    pipeline : gpu.Pipeline;
+    {
+        vert_shader, frag_shader : ^gpu.Shader;
+        found : bool;
+        
+        vert_shader, found = asset.load("assets/test.hlvs", gpu.Shader);
+        assert(found);
+
+        frag_shader, found = asset.load("assets/test.hlps", gpu.Shader);
+        assert(found);
+
+        shaders := []^gpu.Shader{ frag_shader, vert_shader };
+        pipeline_desc := gpu.make_pipeline_description(&render_pass, typeid_of(Vertex), shaders);
+
+        pipeline = gpu.make_graphics_pipeline(device, pipeline_desc);
+    }
+
+    vertices := []Vertex{
+        Vertex{ 
+            position = v3(0, -0.5, 0),
+            color    = core.red,
+        },
+        Vertex{
+            position = v3(0.5, 0.5, 0),
+            color    = core.green,
+        },
+        Vertex{
+            position = v3(-0.5, 0.5, 0),
+            color    = core.blue,
+        }
+    };
+
+    // Make vertex buffer
+    vertex_buffer : gpu.Buffer;
+    {
+        desc := gpu.Buffer_Description{
+            usage  = { .Vertex },
+            memory = .Host_Visible,
+            size   = len(vertices) * size_of(Vertex),
+        };
+
+        vertex_buffer = gpu.make_buffer(device, desc);
+        gpu.copy_to_buffer(&vertex_buffer, vertices);
+    }
+
+    gfx_context := gpu.make_graphics_context(device);
+    gfx := &gfx_context;
+
+    core.show_window(&the_engine.window, true);
 
     for engine.is_running() {
-        job := job.create(proc(job: ^Job) {
-            x := 0;
-            for i in 0..1000000 {
-                x += i;
-            }
-
-            fmt.println(x);
-        });
-
-        counter : job.Counter;
-        for _ in 0..<64 {
-            job.schedule(job, &counter);
-        }
-
         engine.dispatch_input();
 
-        job.wait(counter = &counter, stay_on_thread = true);
+        // Record command buffer
+        {
+            gpu.record(gfx);
+
+            backbuffer := gpu.backbuffer(device);
+            {
+                attachments := []^gpu.Texture{ backbuffer };
+                gpu.render_pass_scope(gfx, &render_pass, attachments);
+
+                gpu.bind_pipeline(gfx, &pipeline, v2(backbuffer.width, backbuffer.height));
+
+                gpu.bind_vertex_buffer(gfx, vertex_buffer);
+                
+                gpu.draw(gfx, len(vertices));
+            }
+            gpu.resource_barrier(gfx, backbuffer, .Color_Attachment, .Present);
+        }
+
+        gpu.submit(device, gfx);
+        gpu.display(device);
     }
 }
+
 ```

@@ -56,8 +56,6 @@ main :: proc() {
 
     the_engine := engine.get();
 
-    job.init_scoped();
-
     // Setup all the gpu stuff including the 
     device := gpu.init(&the_engine.window);
     defer gpu.shutdown();
@@ -67,7 +65,7 @@ main :: proc() {
     // Make render pass
     render_pass : gpu.Render_Pass;
     {
-        swapchain := device.swapchain.(gpu.Swapchain);
+        swapchain := &device.swapchain.(gpu.Swapchain);
         format := swapchain.backbuffers[0].format;
 
         color := gpu.Attachment{ format = format };
@@ -122,6 +120,7 @@ main :: proc() {
         };
 
         vertex_buffer = gpu.make_buffer(device, desc);
+        gpu.copy_to_buffer(&vertex_buffer, vertices);
     }
 
     gfx_context := gpu.make_graphics_context(device);
@@ -137,14 +136,16 @@ main :: proc() {
             gpu.record(gfx);
 
             backbuffer := gpu.backbuffer(device);
-            attachments := []^gpu.Texture{ backbuffer };
-            gpu.render_pass_scope(gfx, &render_pass, attachments);
+            {
+                attachments := []^gpu.Texture{ backbuffer };
+                gpu.render_pass_scope(gfx, &render_pass, attachments);
 
-            gpu.bind_pipeline(gfx, &pipeline, v2(backbuffer.width, backbuffer.height));
+                gpu.bind_pipeline(gfx, &pipeline, v2(backbuffer.width, backbuffer.height));
 
-            gpu.bind_vertex_buffer(gfx, vertex_buffer);
-            gpu.draw(gfx, len(vertices));
-
+                gpu.bind_vertex_buffer(gfx, vertex_buffer);
+                
+                gpu.draw(gfx, len(vertices));
+            }
             gpu.resource_barrier(gfx, backbuffer, .Color_Attachment, .Present);
         }
 

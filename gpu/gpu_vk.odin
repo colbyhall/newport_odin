@@ -21,6 +21,7 @@ Vulkan_State :: struct {
 
     instance : vk.Instance,
     surface  : vk.SurfaceKHR,
+    window   : ^core.Window,
 }
 
 instance_layers := [?]cstring{
@@ -41,7 +42,7 @@ vk_format :: proc (format: Format) -> vk.Format {
     unimplemented();
 }
 
-init_vulkan :: proc(window: ^core.Window) -> ^Device {
+init_vulkan :: proc(the_window: ^core.Window) -> ^Device {
     vulkan_state := new(Vulkan_State);
     vulkan_state.derived = vulkan_state^;
 
@@ -72,6 +73,8 @@ init_vulkan :: proc(window: ^core.Window) -> ^Device {
     }
 
     using vulkan_state;
+
+    window = the_window;
 
     // Create the Vulkan instance
     {
@@ -223,7 +226,16 @@ init_vulkan :: proc(window: ^core.Window) -> ^Device {
         assert(result == .SUCCESS);
     }
 
-    recreate_swapchain(device);
+    recreate_swapchain(device, true);
+
+    {
+        create_info := vk.SemaphoreCreateInfo{
+            sType = .SEMAPHORE_CREATE_INFO,
+        };
+
+        result := vk.CreateSemaphore(logical_gpu, &create_info, nil, &image_available);
+        assert(result == .SUCCESS);
+    }
 
     return device;
 }
@@ -241,7 +253,7 @@ Swapchain :: struct {
 }
 
 @private
-recreate_swapchain :: proc(using device: ^Device) {
+recreate_swapchain :: proc(using device: ^Device, force := false) {
     // Check if there is a valid swapchain and if so delete it
     if swapchain != nil {
         using actual := &swapchain.(Swapchain);
@@ -258,6 +270,10 @@ recreate_swapchain :: proc(using device: ^Device) {
     }
 
     state := get(Vulkan_State);
+
+    vk.DeviceWaitIdle(logical_gpu);
+
+    if state.window.destroyed do return;
 
     // Find the best surface format based on our specs
     capabilities : vk.SurfaceCapabilitiesKHR;
@@ -375,6 +391,8 @@ Device :: struct {
     // TODO: Think about job system and multi-threading
     graphics_command_pool : vk.CommandPool,
 
+    image_available : vk.Semaphore,
+
     swapchain : Maybe(Swapchain),
 }
 
@@ -383,10 +401,10 @@ backbuffer :: proc(using device: ^Device) -> ^Texture {
 
     image_index : u32;
 
-    result := vk.AcquireNextImageKHR(logical_gpu, actual.handle, (1 << 64 - 1), 0, 0, &image_index);
+    result := vk.AcquireNextImageKHR(logical_gpu, actual.handle, (1 << 64 - 1), image_available, 0, &image_index);
     if result == .ERROR_OUT_OF_DATE_KHR || result == .SUBOPTIMAL_KHR {
         recreate_swapchain(device);
-        vk.AcquireNextImageKHR(logical_gpu, actual.handle, (1 << 64 - 1), 0, 0, &image_index);
+        vk.AcquireNextImageKHR(logical_gpu, actual.handle, (1 << 64 - 1), image_available, 0, &image_index);
     }
 
     actual.current = int(image_index);
@@ -403,6 +421,8 @@ submit_multiple :: proc(using device: ^Device, contexts: []^Context) {
 
     submit_info := vk.SubmitInfo{
         sType                = .SUBMIT_INFO,
+        waitSemaphoreCount   = 1,
+        pWaitSemaphores      = &image_available,
         pWaitDstStageMask    = &wait_stage,
         commandBufferCount   = u32(len(buffers)),
         pCommandBuffers      = &buffers[0],
@@ -802,7 +822,7 @@ make_render_pass :: proc(using device: ^Device, desc: Render_Pass_Description) -
             stencilStoreOp = .DONT_CARE,
 
             initialLayout = .UNDEFINED,
-            finalLayout   = .PRESENT_SRC_KHR,
+            finalLayout   = .COLOR_ATTACHMENT_OPTIMAL,
         };
         attachments[i] = attachment;
 

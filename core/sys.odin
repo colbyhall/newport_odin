@@ -11,6 +11,7 @@ Window :: struct {
     handle : Window_Handle,
     width  : int,
     height : int,
+    destroyed : bool,
 
     dispatcher : Event_Dispatcher,
 }

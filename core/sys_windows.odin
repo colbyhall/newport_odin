@@ -37,6 +37,8 @@ win_proc :: proc "c" (hwnd: win32.Hwnd, msg: u32, wparam: win32.Wparam, lparam: 
 
         e.window = window;
 
+        window.destroyed = true;
+
         dispatch_event(&window.dispatcher, &e);
     case win32.WM_SIZING, win32.WM_SIZE:
         e : Window_Resize_Event;
@@ -223,6 +225,12 @@ poll_events :: proc(using window: ^Window) {
     }
 }
 
+is_window_visible :: proc(using window: ^Window) -> bool {
+    visible := IsWindowVisible(auto_cast handle);
+    iconic := IsIconic(auto_cast handle);
+    return bool(visible) && !bool(iconic);
+}
+
 // TODO: Do this the proper way
 exe_path :: proc() -> string {
     buffer  : [1024]u8;
@@ -284,6 +292,8 @@ foreign user32 {
     SetCapture :: proc(hWnd: win32.Hwnd) -> win32.Hwnd ---;
     ReleaseCapture :: proc() -> win32.Bool ---;
     GetCaretBlinkTime :: proc() -> u32 ---;
+    IsWindowVisible :: proc(hWnd: win32.Hwnd) -> win32.Bool ---;
+    IsIconic :: proc(hWnd: win32.Hwnd) -> win32.Bool ---;
 }
 
 LOGICAL_PROCESSOR_RELATIONSHIP :: enum {
