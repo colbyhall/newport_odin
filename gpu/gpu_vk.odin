@@ -913,6 +913,12 @@ delete_render_pass :: proc(using rp: ^Render_Pass) {
     // UNIMPLEMENTED
 }
 
+//
+// Shader API
+////////////////////////////////////////////////////
+
+import "../deps/spv_reflect"
+
 Shader :: struct {
     using asset : asset.Asset,
 
@@ -921,6 +927,21 @@ Shader :: struct {
 }
 
 init_shader :: proc(using device: ^Device, shader: ^Shader, contents: []byte) {
+    // Use Spirv Reflect to retrieve Descriptor info
+    {
+        // Grab the reflect shader module
+        using spv_reflect;
+
+        module : ShaderModule;
+        result := CreateShaderModule(auto_cast len(contents), &contents[0], &module);
+        assert(result == .SUCCESS);
+        defer DestroyShaderModule(&module);
+
+        count : u32;
+        // result = spv_reflect.
+    }
+
+
     create_info := vk.ShaderModuleCreateInfo{
         sType    = .SHADER_MODULE_CREATE_INFO,
         codeSize = len(contents),
@@ -930,6 +951,10 @@ init_shader :: proc(using device: ^Device, shader: ^Shader, contents: []byte) {
     result := vk.CreateShaderModule(logical_gpu, &create_info, nil, &shader.module);
     assert(result == .SUCCESS);
 }
+
+//
+// Pipeline API
+////////////////////////////////////////////////////
 
 Pipeline :: struct {
     handle : vk.Pipeline,

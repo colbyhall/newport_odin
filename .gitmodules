@@ -6,6 +6,6 @@
     path = deps/dxc
     url = https://github.com/colbyhall/odin-dxc
 
-[submodule "deps/spv"]
-    path = deps/spv
-    url = https://github.com/colbyhall/odin-spv.git
+[submodule "deps/spv_reflect"]
+    path = deps/spv_reflect
+    url = https://github.com/colbyhall/odin-spv-reflect.git

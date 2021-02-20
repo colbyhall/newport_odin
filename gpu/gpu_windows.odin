@@ -275,7 +275,7 @@ register_shader :: proc() {
         switch ext {
         case "hlps": type = .Pixel;
         case "hlvs": type = .Vertex;
-        case: assert(false);
+        case: unreachable();
         }
 
         contents, found := find_in_shader_cache(shader);

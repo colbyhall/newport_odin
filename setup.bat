@@ -4,7 +4,7 @@ echo Grabbing submodules
 call git submodule init
 call git submodule update
 
-pushd deps\spirv_reflect
+pushd deps\spv
 
 echo Building SPIRV Reflect
 call build.bat
