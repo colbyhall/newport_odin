@@ -919,33 +919,68 @@ delete_render_pass :: proc(using rp: ^Render_Pass) {
 
 import "../deps/spv_reflect"
 
-
-
 Shader :: struct {
     using asset : asset.Asset,
 
     type : Shader_Type,
     module : vk.ShaderModule,
 
-    // Reflection stuff
-    reflect_module  : spv_reflect.ShaderModule,
-    descriptor_sets : []^spv_reflect.DescriptorSet,
+    sets : []vk.DescriptorSetLayout,
 }
 
+@private
+shader_type_to_shader_stage :: proc(type: Shader_Type) -> vk.ShaderStageFlag {
+    switch type {
+    case .Vertex: return .VERTEX;
+    case .Pixel:  return .FRAGMENT;
+    }
+    unreachable();
+}
+
+import "core:fmt"
+
 init_shader :: proc(using device: ^Device, shader: ^Shader, contents: []byte) {
-    // Use Spirv Reflect to retrieve Descriptor info
-    result := spv_reflect.CreateShaderModule(auto_cast len(contents), &contents[0], &shader.reflect_module);
-    assert(result == .SUCCESS);
-
-    count : u32;
-    result = spv_reflect.EnumerateDescriptorSets(&shader.reflect_module, &count, nil);
-    assert(result == .SUCCESS);
-
-    if count > 0 {
-        shader.descriptor_sets = make([]^spv_reflect.DescriptorSet, int(count));
-        
-        result = spv_reflect.EnumerateDescriptorSets(&reflect_module, &count, &shader.descriptor_sets[0]);
+    // Use Spirv Reflect to retrieve Descriptor info and then build the descriptor layouts
+    {
+        module : spv_reflect.ShaderModule;
+        result := spv_reflect.CreateShaderModule(auto_cast len(contents), &contents[0], &module);
         assert(result == .SUCCESS);
+        defer spv_reflect.DestroyShaderModule(&module);
+
+        count : u32;
+        result = spv_reflect.EnumerateDescriptorSets(&module, &count, nil);
+        assert(result == .SUCCESS);
+
+        if count > 0 {
+            sets := make([]^spv_reflect.DescriptorSet, int(count), context.temp_allocator);
+            
+            result = spv_reflect.EnumerateDescriptorSets(&module, &count, &sets[0]);
+            assert(result == .SUCCESS);
+
+            shader.sets = make([]vk.DescriptorSetLayout, int(count));
+            for it, i in sets {
+                bindings := make([]vk.DescriptorSetLayoutBinding, int(it.binding_count), context.temp_allocator);
+                for binding, i in &bindings {
+                    actual := mem.ptr_offset(it.bindings, i)^;
+
+                    binding.binding         = actual.binding;
+                    binding.descriptorType  = auto_cast actual.descriptor_type;
+                    binding.descriptorCount = actual.count;
+
+                    stage := shader_type_to_shader_stage(shader.type);
+                    binding.stageFlags = { stage };
+                }
+
+                create_info := vk.DescriptorSetLayoutCreateInfo{
+                    sType        = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                    bindingCount = it.binding_count,
+                    pBindings    = &bindings[0],
+                };
+
+                result := vk.CreateDescriptorSetLayout(logical_gpu, &create_info, nil, &shader.sets[i]);
+                assert(result == .SUCCESS);
+            }
+        }
     }
 
     create_info := vk.ShaderModuleCreateInfo{
@@ -972,17 +1007,14 @@ Pipeline :: struct {
 make_graphics_pipeline :: proc(using device: ^Device, using description: Pipeline_Description) -> Pipeline {
     assert(len(shaders) > 0);
 
-    // Setup all the shader stages and load into a buffer
+    // Setup all the shader stages and load into a buffer. Also count the descriptor set layouts
+    num_set_layouts : int;
     shader_stages := make([]vk.PipelineShaderStageCreateInfo, len(shaders), context.temp_allocator);
     for it, i in shaders {
         if it == nil do continue;
         assert(it.loaded);
 
-        stage : vk.ShaderStageFlag;
-        switch it.type {
-        case .Vertex: stage = .VERTEX;
-        case .Pixel:  stage = .FRAGMENT;
-        }
+        stage := shader_type_to_shader_stage(it.type);
 
         stage_info := vk.PipelineShaderStageCreateInfo{
             sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -992,6 +1024,7 @@ make_graphics_pipeline :: proc(using device: ^Device, using description: Pipelin
         };
 
         shader_stages[i] = stage_info;
+        num_set_layouts += len(it.sets);
     }
 
     // Do the vertex input stuff
@@ -1153,12 +1186,21 @@ make_graphics_pipeline :: proc(using device: ^Device, using description: Pipelin
         pDynamicStates      = &dynamic_states[0],
     };
 
-    // TODO(colby): Look into what a pipeline layout is and why
+    set_layouts := make([]vk.DescriptorSetLayout, num_set_layouts, context.temp_allocator);
+    num_set_layouts = 0;
+    for it in shaders {
+        for set in it.sets {
+            set_layouts[num_set_layouts] = set;
+            num_set_layouts += 1;
+        }
+    }
+
     pipeline_layout_info := vk.PipelineLayoutCreateInfo{
         sType          = .PIPELINE_LAYOUT_CREATE_INFO,
-        // setLayoutCount = 1,
-        // pSetLayouts    = &set_layout,
+        setLayoutCount = u32(num_set_layouts),
     };
+
+    if num_set_layouts > 0 do pipeline_layout_info.pSetLayouts = &set_layouts[0];
 
     layout : vk.PipelineLayout;
     result := vk.CreatePipelineLayout(logical_gpu, &pipeline_layout_info, nil, &layout);

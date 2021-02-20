@@ -8,10 +8,16 @@ struct Vertex_Output {
     float4 position : SV_Position;
 };
 
+cbuffer ubo : register(b0) {
+    float4x4 projection;
+    float4x4 view;
+    float4x4 world;
+}
+
 Vertex_Output main( Vertex IN ) {
     Vertex_Output OUT;
 
-    OUT.position = float4(IN.position.xyz, 1.0);
+    OUT.position = mul(projection, mul(view, mul(world, float4(IN.position.xyz, 1.0))));
     OUT.color = float4(IN.color.xyz, 1.0);
 
     return OUT;
