@@ -478,7 +478,7 @@ make_buffer :: proc(using device: ^Device, desc: Buffer_Description) -> Buffer {
     if .Transfer_Dst in desc.usage do usage |= { .TRANSFER_DST };
     if .Vertex       in desc.usage do usage |= { .VERTEX_BUFFER };
     if .Index        in desc.usage do usage |= { .INDEX_BUFFER };
-    if .Uniform      in desc.usage do usage |= { .UNIFORM_BUFFER };
+    if .Constants    in desc.usage do usage |= { .UNIFORM_BUFFER };
 
     create_info := vk.BufferCreateInfo{
         sType       = .BUFFER_CREATE_INFO,
@@ -550,7 +550,7 @@ delete_buffer :: proc(using buffer: ^Buffer) {
     memory = 0;
 }
 
-copy_to_buffer :: proc(using dst: ^Buffer, src: []$E) {
+copy_to_buffer_array :: proc(using dst: ^Buffer, src: []$E) {
     assert(len(src) * size_of(E) == desc.size);
 
     data: rawptr;
@@ -558,6 +558,17 @@ copy_to_buffer :: proc(using dst: ^Buffer, src: []$E) {
     mem.copy(data, &src[0], desc.size);
     vk.UnmapMemory(device.logical_gpu, memory);
 }
+
+copy_to_buffer_value :: proc(using dst: ^Buffer, src: ^$E) {
+    assert(size_of(E) == desc.size);
+
+    data: rawptr;
+    vk.MapMemory(device.logical_gpu, memory, 0, vk.DeviceSize(desc.size), {}, &data);
+    mem.copy(data, src, desc.size);
+    vk.UnmapMemory(device.logical_gpu, memory);
+}
+
+copy_to_buffer :: proc{ copy_to_buffer_array, copy_to_buffer_value };
 
 //
 // Texture API
@@ -587,6 +598,9 @@ Context :: struct {
     device         : ^Device,
 
     framebuffers   : [dynamic]vk.Framebuffer,
+
+    current_render_pass : ^Render_Pass,
+    current_pipeline    : ^Pipeline,
 }
 
 begin :: proc(using ctx: ^Context) {
@@ -705,6 +719,8 @@ begin_render_pass :: proc(using ctx: ^Context, render_pass: ^Render_Pass, attach
         height = u32(attachments[0].height)
     };
 
+    current_render_pass = render_pass;
+
     render_area := vk.Rect2D{ extent = extent };
 
     // Make the framebuffer
@@ -742,6 +758,9 @@ begin_render_pass :: proc(using ctx: ^Context, render_pass: ^Render_Pass, attach
 
 end_render_pass :: proc(using ctx: ^Context) {
     vk.CmdEndRenderPass(command_buffer);
+
+    current_render_pass = nil;
+    current_pipeline    = nil;
 }
 
 @(deferred_out=end_render_pass)
@@ -752,6 +771,7 @@ render_pass_scope :: proc(using ctx: ^Context, render_pass: ^Render_Pass, attach
 
 bind_pipeline :: proc(using ctx: ^Context, pipeline: ^Pipeline, viewport: Vector2, scissor: Maybe(Rect) = nil) {
     vk.CmdBindPipeline(command_buffer, .GRAPHICS, pipeline.handle);
+    current_pipeline = pipeline;
 
     vk_viewport := vk.Viewport{
         width    = viewport.x,
@@ -787,6 +807,12 @@ bind_vertex_buffer :: proc(using ctx: ^Context, b: Buffer) {
 
 draw :: proc(using ctx: ^Context, auto_cast vertex_count: int, auto_cast first_vertex := 0) {
     vk.CmdDraw(command_buffer, u32(vertex_count), 1, u32(first_vertex), 0);
+}
+
+bind_resource_set :: proc(using ctx: ^Context, set: ^Resource_Set) {
+    assert(current_pipeline != nil, "Pipeline must be bound to bind resource set");
+
+    vk.CmdBindDescriptorSets(command_buffer, .GRAPHICS, current_pipeline.layout, 0, 1, &set.handle, 0, nil);
 }
 
 //
@@ -922,10 +948,14 @@ import "../deps/spv_reflect"
 Shader :: struct {
     using asset : asset.Asset,
 
-    type : Shader_Type,
+    type   : Shader_Type,
     module : vk.ShaderModule,
+    device : ^Device,
 
     sets : []vk.DescriptorSetLayout,
+
+    reflect_module : spv_reflect.ShaderModule,
+    reflect_sets : []^spv_reflect.DescriptorSet,
 }
 
 @private
@@ -941,56 +971,57 @@ import "core:fmt"
 
 init_shader :: proc(using device: ^Device, shader: ^Shader, contents: []byte) {
     // Use Spirv Reflect to retrieve Descriptor info and then build the descriptor layouts
-    {
-        module : spv_reflect.ShaderModule;
-        result := spv_reflect.CreateShaderModule(auto_cast len(contents), &contents[0], &module);
+    result := spv_reflect.CreateShaderModule(auto_cast len(contents), &contents[0], &shader.reflect_module);
+    assert(result == .SUCCESS);
+
+    count : u32;
+    result = spv_reflect.EnumerateDescriptorSets(&shader.reflect_module, &count, nil);
+    assert(result == .SUCCESS);
+
+    if count > 0 {
+        shader.reflect_sets = make([]^spv_reflect.DescriptorSet, int(count));
+        
+        result = spv_reflect.EnumerateDescriptorSets(&shader.reflect_module, &count, &shader.reflect_sets[0]);
         assert(result == .SUCCESS);
-        defer spv_reflect.DestroyShaderModule(&module);
 
-        count : u32;
-        result = spv_reflect.EnumerateDescriptorSets(&module, &count, nil);
-        assert(result == .SUCCESS);
+        shader.sets = make([]vk.DescriptorSetLayout, int(count));
+        for it, i in shader.reflect_sets {
+            bindings := make([]vk.DescriptorSetLayoutBinding, int(it.binding_count), context.temp_allocator);
+            for binding, i in &bindings {
+                actual := mem.ptr_offset(it.bindings, i)^;
 
-        if count > 0 {
-            sets := make([]^spv_reflect.DescriptorSet, int(count), context.temp_allocator);
-            
-            result = spv_reflect.EnumerateDescriptorSets(&module, &count, &sets[0]);
-            assert(result == .SUCCESS);
+                binding.binding         = actual.binding;
+                binding.descriptorType  = auto_cast actual.descriptor_type;
+                binding.descriptorCount = actual.count;
 
-            shader.sets = make([]vk.DescriptorSetLayout, int(count));
-            for it, i in sets {
-                bindings := make([]vk.DescriptorSetLayoutBinding, int(it.binding_count), context.temp_allocator);
-                for binding, i in &bindings {
-                    actual := mem.ptr_offset(it.bindings, i)^;
-
-                    binding.binding         = actual.binding;
-                    binding.descriptorType  = auto_cast actual.descriptor_type;
-                    binding.descriptorCount = actual.count;
-
-                    stage := shader_type_to_shader_stage(shader.type);
-                    binding.stageFlags = { stage };
-                }
-
-                create_info := vk.DescriptorSetLayoutCreateInfo{
-                    sType        = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-                    bindingCount = it.binding_count,
-                    pBindings    = &bindings[0],
-                };
-
-                result := vk.CreateDescriptorSetLayout(logical_gpu, &create_info, nil, &shader.sets[i]);
-                assert(result == .SUCCESS);
+                stage := shader_type_to_shader_stage(shader.type);
+                binding.stageFlags = { stage };
             }
+
+            create_info := vk.DescriptorSetLayoutCreateInfo{
+                sType        = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                bindingCount = it.binding_count,
+                pBindings    = &bindings[0],
+            };
+
+            result := vk.CreateDescriptorSetLayout(logical_gpu, &create_info, nil, &shader.sets[i]);
+            assert(result == .SUCCESS);
         }
     }
 
-    create_info := vk.ShaderModuleCreateInfo{
-        sType    = .SHADER_MODULE_CREATE_INFO,
-        codeSize = len(contents),
-        pCode    = cast(^u32)&contents[0],
-    };
+    // Create the actual vulkan shader module
+    {
+        create_info := vk.ShaderModuleCreateInfo{
+            sType    = .SHADER_MODULE_CREATE_INFO,
+            codeSize = len(contents),
+            pCode    = cast(^u32)&contents[0],
+        };
 
-    result := vk.CreateShaderModule(logical_gpu, &create_info, nil, &shader.module);
-    assert(result == .SUCCESS);
+        result := vk.CreateShaderModule(logical_gpu, &create_info, nil, &shader.module);
+        assert(result == .SUCCESS);
+    }
+
+    shader.device = device;
 }
 
 //
@@ -1000,6 +1031,7 @@ init_shader :: proc(using device: ^Device, shader: ^Shader, contents: []byte) {
 Pipeline :: struct {
     handle : vk.Pipeline,
     layout : vk.PipelineLayout,
+    device : ^Device,
 
     description : Pipeline_Description,
 }
@@ -1231,6 +1263,7 @@ make_graphics_pipeline :: proc(using device: ^Device, using description: Pipelin
     return Pipeline{ 
         description = description, 
         handle      = handle, 
+        device      = device,
         
         layout      = layout,
     };
@@ -1238,5 +1271,81 @@ make_graphics_pipeline :: proc(using device: ^Device, using description: Pipelin
 
 make_pipeline :: proc{ make_graphics_pipeline };
 
+Resource_Set_Pool :: struct {
+    handle : vk.DescriptorPool,
+    shader : ^Shader,
+}
+
+make_resource_set_pool :: proc(using shader: ^Shader, auto_cast max_sets: int) -> Resource_Set_Pool {
+    num_uniforms := 0;
+    for set in shader.reflect_sets {
+        for i in 0..<int(set.binding_count) {
+            binding := mem.ptr_offset(set.bindings, i)^;
+
+            #partial switch binding.descriptor_type {
+            case .UNIFORM_BUFFER: num_uniforms += 1;
+            case: unimplemented();
+            }
+        }
+    }
+
+    uniform_pool_size := vk.DescriptorPoolSize{
+        type = .UNIFORM_BUFFER,
+        descriptorCount = u32(num_uniforms),
+    };
+
+    create_info := vk.DescriptorPoolCreateInfo{
+        sType           = .DESCRIPTOR_POOL_CREATE_INFO,
+        poolSizeCount   = 1,
+        pPoolSizes      = &uniform_pool_size,
+        maxSets         = u32(max_sets),
+    };
+
+    handle : vk.DescriptorPool;
+    result := vk.CreateDescriptorPool(device.logical_gpu, &create_info, nil, &handle);
+    assert(result == .SUCCESS);
+
+    return Resource_Set_Pool{ handle = handle, shader = shader };
+}
+
+Resource_Set :: struct {
+    handle : vk.DescriptorSet,
+    pool   : ^Resource_Set_Pool,
+}
+
+allocate_resource_set :: proc(pool: ^Resource_Set_Pool, auto_cast set: int) -> Resource_Set {
+    alloc_info := vk.DescriptorSetAllocateInfo{
+        sType = .DESCRIPTOR_SET_ALLOCATE_INFO,
+        descriptorPool     = pool.handle,
+        descriptorSetCount = 1,
+        pSetLayouts        = &pool.shader.sets[set],
+    };
+
+    handle : vk.DescriptorSet;
+    result := vk.AllocateDescriptorSets(pool.shader.device.logical_gpu, &alloc_info, &handle);
+    assert(result == .SUCCESS);
+    return Resource_Set{ handle = handle, pool = pool, };
+}
+
+bind_buffer_to_set :: proc(using set: ^Resource_Set, buffer: Buffer, auto_cast binding : int = 0) {
+    buffer_info := vk.DescriptorBufferInfo{
+        buffer = buffer.handle,
+        offset = 0,
+        range  = vk.DeviceSize(buffer.desc.size),
+    };
+
+    set_write := vk.WriteDescriptorSet{
+        sType           = .WRITE_DESCRIPTOR_SET,
+        dstSet          = handle,
+        dstBinding      = u32(binding),
+        descriptorType  = .UNIFORM_BUFFER,
+        descriptorCount = 1,
+        pBufferInfo     = &buffer_info,
+    };
+
+    vk.UpdateDescriptorSets(pool.shader.device.logical_gpu, 1, &set_write, 0, nil);
+}
+
+bind_to_set :: proc{ bind_buffer_to_set };
 
 }

@@ -156,7 +156,7 @@ Buffer_Usage :: enum {
     Transfer_Dst,
     Vertex,
     Index,
-    Uniform,
+    Constants,
 }
 
 // TODO: Document

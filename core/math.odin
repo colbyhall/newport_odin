@@ -1,7 +1,7 @@
 package core
 
 import "core:math"
-import la "core:math/linalg"
+import "core:math/linalg"
 
 TAU :: math.TAU;
 PI  :: math.PI;
@@ -17,13 +17,13 @@ round :: math.round;
 atan2 :: math.atan2;
 lerp  :: math.lerp;
 
-length_sq    :: la.length2;
-length       :: la.length;
-norm         :: la.normalize;
-dot          :: la.dot;
-cross        :: la.vector_cross;
+length_sq    :: linalg.length2;
+length       :: linalg.length;
+norm         :: linalg.normalize;
+dot          :: linalg.dot;
+cross        :: linalg.vector_cross;
 
-Vector2 :: la.Vector2;
+Vector2 :: linalg.Vector2;
 
 v2xy :: inline proc(x, y: f32) -> Vector2 {
     return Vector2 { x, y };
@@ -43,7 +43,7 @@ v2xyi :: inline proc(auto_cast x, y: int) -> Vector2 {
 
 v2 :: proc { v2xy, v2s, v2z, v2xyi };
 
-Vector3 :: la.Vector3;
+Vector3 :: linalg.Vector3;
 
 v3xyz :: inline proc(x, y, z: f32) -> Vector3 {
     return Vector3 { x, y, z };
@@ -63,7 +63,7 @@ v3xy_z :: inline proc(xy: Vector2, z: f32) -> Vector3 {
 
 v3 :: proc { v3xyz, v3s, v3z, v3xy_z };
 
-Vector4 :: la.Vector4;
+Vector4 :: linalg.Vector4;
 
 v4s :: inline proc(xyzw : f32 = 0) -> Vector4 {
     return Vector4{ xyzw, xyzw, xyzw, xyzw };
@@ -75,7 +75,7 @@ v4xyzw :: inline proc(x, y, z, w: f32) -> Vector4 {
 
 v4 :: proc { v4s, v4xyzw };
 
-Matrix4 :: la.Matrix4;
+Matrix4 :: linalg.Matrix4;
 
 // NOTE: I've gone back and rewritten the projection functions for property 0 - 1 Z clipping
 ortho :: proc(size, aspect_ratio, near, far: f32, flip_z_axis := true) -> Matrix4 {
@@ -85,7 +85,7 @@ ortho :: proc(size, aspect_ratio, near, far: f32, flip_z_axis := true) -> Matrix
     top   := size;
     bot   := -top;
 
-    result := la.matrix_ortho3d(left, right, bot, top, near, far, flip_z_axis);
+    result := linalg.matrix_ortho3d(left, right, bot, top, near, far, flip_z_axis);
 
     // Depth 0 - 1 
     result[2][2] = -1 / (far - near);
@@ -95,7 +95,7 @@ ortho :: proc(size, aspect_ratio, near, far: f32, flip_z_axis := true) -> Matrix
 }
 
 persp :: proc(fov, aspect_ratio, near, far: f32, flip_z_axis := true) -> Matrix4 {
-    result := la.matrix4_perspective(fov, aspect_ratio, near, far, flip_z_axis);
+    result := linalg.matrix4_perspective(fov, aspect_ratio, near, far, flip_z_axis);
 
     result[2][2] = far / (near - far);
     result[3][2] = -(far * near) / (far - near);
@@ -103,18 +103,19 @@ persp :: proc(fov, aspect_ratio, near, far: f32, flip_z_axis := true) -> Matrix4
     return result;
 }
 
-transpose    :: la.transpose;
-translate    :: la.matrix4_translate;
-scale        :: la.matrix4_scale;
-inverse      :: la.matrix4_inverse;
-quat_to_mat4 :: la.matrix4_from_quaternion;
-mul          :: la.mul;
+transpose    :: linalg.transpose;
+translate    :: linalg.matrix4_translate;
+scale        :: linalg.matrix4_scale;
+inverse      :: linalg.matrix4_inverse;
+quat_to_mat4 :: linalg.matrix4_from_quaternion;
+mul          :: linalg.mul;
 
-Quaternion   :: la.Quaternion;
+Quaternion   :: linalg.Quaternion;
 
-slerp        :: la.quaternion_slerp;
-angle_axis   :: la.quaternion_angle_axis;
-identity     :: la.identity;
+slerp        :: linalg.quaternion_slerp;
+angle_axis   :: linalg.quaternion_angle_axis;
+
+MATRIX4_IDENTITY :: linalg.MATRIX4_IDENTITY;
 
 Rect :: struct {
     min, max : Vector2,
