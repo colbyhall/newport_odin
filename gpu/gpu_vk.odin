@@ -919,28 +919,34 @@ delete_render_pass :: proc(using rp: ^Render_Pass) {
 
 import "../deps/spv_reflect"
 
+
+
 Shader :: struct {
     using asset : asset.Asset,
 
     type : Shader_Type,
     module : vk.ShaderModule,
+
+    // Reflection stuff
+    reflect_module  : spv_reflect.ShaderModule,
+    descriptor_sets : []^spv_reflect.DescriptorSet,
 }
 
 init_shader :: proc(using device: ^Device, shader: ^Shader, contents: []byte) {
     // Use Spirv Reflect to retrieve Descriptor info
-    {
-        // Grab the reflect shader module
-        using spv_reflect;
+    result := spv_reflect.CreateShaderModule(auto_cast len(contents), &contents[0], &shader.reflect_module);
+    assert(result == .SUCCESS);
 
-        module : ShaderModule;
-        result := CreateShaderModule(auto_cast len(contents), &contents[0], &module);
+    count : u32;
+    result = spv_reflect.EnumerateDescriptorSets(&shader.reflect_module, &count, nil);
+    assert(result == .SUCCESS);
+
+    if count > 0 {
+        shader.descriptor_sets = make([]^spv_reflect.DescriptorSet, int(count));
+        
+        result = spv_reflect.EnumerateDescriptorSets(&reflect_module, &count, &shader.descriptor_sets[0]);
         assert(result == .SUCCESS);
-        defer DestroyShaderModule(&module);
-
-        count : u32;
-        // result = spv_reflect.
     }
-
 
     create_info := vk.ShaderModuleCreateInfo{
         sType    = .SHADER_MODULE_CREATE_INFO,
@@ -974,8 +980,8 @@ make_graphics_pipeline :: proc(using device: ^Device, using description: Pipelin
 
         stage : vk.ShaderStageFlag;
         switch it.type {
-        case .Vertex:   stage = .VERTEX;
-        case .Pixel: stage = .FRAGMENT;
+        case .Vertex: stage = .VERTEX;
+        case .Pixel:  stage = .FRAGMENT;
         }
 
         stage_info := vk.PipelineShaderStageCreateInfo{
