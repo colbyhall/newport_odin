@@ -2,3 +2,5 @@ test/bin
 test/logs
 test/cache
 */lib
+*.sublime-project
+*.sublime-workspace

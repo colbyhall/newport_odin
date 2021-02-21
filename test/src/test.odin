@@ -151,6 +151,7 @@ main :: proc() {
 
     for engine.is_running() {
         engine.dispatch_input();
+        asset.poll_changes();
 
         x : Constant_Buffer;
         x.world = MATRIX4_IDENTITY;

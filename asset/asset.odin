@@ -12,6 +12,9 @@ import "core:encoding/json"
 import "core:sync"
 import "core:runtime"
 import "core:time"
+import "core:fmt"
+
+import "../core"
 
 ASSETS_PATH :: "assets";
 
@@ -69,6 +72,8 @@ Manager :: struct {
     assets : map[string]^Asset,
 
     registers : [dynamic]Type_Register,
+
+    monitor : Directory_Monitor,
 }
 
 @private manager : Manager;
@@ -159,6 +164,39 @@ discover :: proc() {
     }
 
     filepath.walk(ASSETS_PATH, walk_proc);
+
+    monitor, ok := monitor_directory(ASSETS_PATH, true);
+    assert(ok);
+
+    core.add_event_listener(&monitor.dispatcher, manager, proc(owner: rawptr, event: ^core.Event) -> bool {
+        using core;
+        using manager;
+
+        switch event in event.derived {
+        case File_Modified_Event:
+            asset, found := assets[event.path];
+
+            if !found do return false;
+
+            log.infof("[Asset] \"{}\" was modified.", event.path);
+        case File_Created_Event:
+            log.infof("[Asset] \"{}\" was created.", event.path);
+        case File_Deleted_Event:
+            asset, found := assets[event.path];
+
+            if !found do return false;
+
+            log.infof("[Asset] \"{}\" was deleted.", event.path);
+        }
+
+        return false;
+    }, 100);
+
+    manager.monitor = monitor;
+}
+
+poll_changes :: proc() {
+    poll_monitor(&manager.monitor);
 }
 
 is_loaded :: proc(using asset: ^Asset) -> bool {
