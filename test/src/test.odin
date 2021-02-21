@@ -122,7 +122,7 @@ main :: proc() {
             color    = core.green,
         },
         Vertex{ 
-            position = v3(0, 500, -20),
+            position = v3(450, 500, -20),
             color    = core.red,
         },
         Vertex{
@@ -153,7 +153,7 @@ main :: proc() {
         engine.dispatch_input();
 
         x : Constant_Buffer;
-        x.world      = MATRIX4_IDENTITY;
+        x.world = MATRIX4_IDENTITY;
 
         x.projection, x.view = render_right_handed(engine.viewport());
 
