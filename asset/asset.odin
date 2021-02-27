@@ -26,8 +26,10 @@ Flags :: enum {
 Asset :: struct {
     path : string,
 
-    loaded  : bool, // Updated by atomics
-    loading : bool, // Updated by atomics
+    // Updated by atomics
+    loaded  : bool, 
+    loading : bool,
+    refs    : int,
     
     last_write_time : time.Time,
 
@@ -72,8 +74,6 @@ Manager :: struct {
     assets : map[string]^Asset,
 
     registers : [dynamic]Type_Register,
-
-    monitor : Directory_Monitor,
 }
 
 @private manager : Manager;
@@ -164,39 +164,6 @@ discover :: proc() {
     }
 
     filepath.walk(ASSETS_PATH, walk_proc);
-
-    monitor, ok := monitor_directory(ASSETS_PATH, true);
-    assert(ok);
-
-    core.add_event_listener(&monitor.dispatcher, manager, proc(owner: rawptr, event: ^core.Event) -> bool {
-        using core;
-        using manager;
-
-        switch event in event.derived {
-        case File_Modified_Event:
-            asset, found := assets[event.path];
-
-            if !found do return false;
-
-            log.infof("[Asset] \"{}\" was modified.", event.path);
-        case File_Created_Event:
-            log.infof("[Asset] \"{}\" was created.", event.path);
-        case File_Deleted_Event:
-            asset, found := assets[event.path];
-
-            if !found do return false;
-
-            log.infof("[Asset] \"{}\" was deleted.", event.path);
-        }
-
-        return false;
-    }, 100);
-
-    manager.monitor = monitor;
-}
-
-poll_changes :: proc() {
-    poll_monitor(&manager.monitor);
 }
 
 is_loaded :: proc(using asset: ^Asset) -> bool {
@@ -475,10 +442,12 @@ load_from_json :: proc(asset: ^$T) -> bool {
     return true;
 }
 
-load_asset :: proc(asset: ^Asset) -> bool {
+acquire_asset :: proc(asset: ^Asset) -> bool {
     using manager;
 
     if asset == nil do return false;
+
+    sync.atomic_add(&asset.refs, 1, .Relaxed);
 
     if is_loaded(asset) do return true;
 
@@ -497,6 +466,7 @@ load_asset :: proc(asset: ^Asset) -> bool {
     loaded := reg.load(asset);
     if !loaded {
         sync.atomic_store(&asset.loading, false, .Relaxed);
+        log.errorf("[Asset] Failed to load asset \"{}\"", asset.path);
         return false;
     }
 
@@ -506,28 +476,64 @@ load_asset :: proc(asset: ^Asset) -> bool {
     return true;
 }
 
-load_asset_by_path :: proc(path: string) -> (^Asset, bool) {
+acquire_asset_by_path :: proc(path: string) -> (^Asset, bool) {
     using manager;
 
     asset := find_asset(path);
-    loaded := load_asset(asset);
+    loaded := acquire_asset(asset);
     return asset, loaded;
 }
 
-load_casted :: proc(asset: ^$T) -> bool {
-    return load_asset(asset);
+acquire_casted :: proc(asset: ^$T) -> bool {
+    return acquire_asset(asset);
 }
 
-load_casted_by_path :: proc(path: string, $T: typeid) -> (^T, bool) {
+acquire_casted_by_path :: proc(path: string, $T: typeid) -> (^T, bool) {
     using manager;
 
     t := find_casted(path, T);
-    loaded := load_casted(t);
+    loaded := acquire_casted(t);
 
     return t, loaded;
 }
 
-load :: proc{ load_asset, load_casted, load_asset_by_path, load_casted_by_path };
+acquire :: proc{ acquire_asset, acquire_casted, acquire_asset_by_path, acquire_casted_by_path };
+
+release :: proc(asset: ^Asset) -> bool {
+    using manager;
+
+    if asset == nil do return false;
+
+    assert(is_loaded(asset), "Releasing should only happen after an asset is acquired");
+
+    refs := sync.atomic_sub(&asset.refs, 1, .Relaxed);
+
+    if refs == 0 {
+        ext := path_lib.ext(asset.path)[1:];
+        reg := register_from_extension(ext);
+        assert(reg != nil);
+
+        _, ok := sync.atomic_compare_exchange_weak(&asset.loading, false, true, .Sequentially_Consistent, .Relaxed);
+        if !ok {
+            log.error("[Asset] Failed to unload asset \"{}\"!!!!!", asset.path);
+            return false;
+        }
+
+        unloaded := reg.unload(asset);
+        if !unloaded {
+            sync.atomic_store(&asset.loading, false, .Relaxed);
+            log.error("[Asset] Failed to unload asset \"{}\"!!!!!", asset.path);
+            return false;
+        }
+
+        sync.atomic_store(&asset.loaded, false, .Relaxed);
+        sync.atomic_store(&asset.loading, false, .Relaxed);
+        return true;
+    }
+
+    return false;
+
+}
 
 find_asset :: proc(path: string) -> ^Asset {
     using manager;

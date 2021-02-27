@@ -87,10 +87,10 @@ main :: proc() {
     vert_shader, frag_shader : ^gpu.Shader;
     found : bool;
     
-    vert_shader, found = asset.load("assets/test.hlvs", gpu.Shader);
+    vert_shader, found = asset.acquire("assets/test.hlvs", gpu.Shader);
     assert(found);
 
-    frag_shader, found = asset.load("assets/test.hlps", gpu.Shader);
+    frag_shader, found = asset.acquire("assets/test.hlps", gpu.Shader);
     assert(found);
 
     // Make graphics pipeline
@@ -151,7 +151,6 @@ main :: proc() {
 
     for engine.is_running() {
         engine.dispatch_input();
-        asset.poll_changes();
 
         x : Constant_Buffer;
         x.world = MATRIX4_IDENTITY;
