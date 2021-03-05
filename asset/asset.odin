@@ -174,10 +174,10 @@ is_loading :: proc(using asset: ^Asset) -> bool {
     return sync.atomic_load(&loading, .Relaxed);
 }
 
-load_from_json :: proc(asset: ^$T) -> bool {
-    source, found := os.read_entire_file(asset.path);
+load_from_json :: proc(asset: ^$T, path: string) -> bool {
+    source, found := os.read_entire_file(path);
     if !found {
-        log.errorf("[Asset] Failed to load file at path {}", asset.path);
+        log.errorf("[Asset] Failed to load file at path {}", path);
         return false;
     }
 
@@ -205,7 +205,7 @@ load_from_json :: proc(asset: ^$T) -> bool {
             "Expected colon after key"
         };
 
-        log_error_json(errors_string[err], asset.path, val);
+        log_error_json(errors_string[err], path, val);
         return false;
     }
 
@@ -213,6 +213,14 @@ load_from_json :: proc(asset: ^$T) -> bool {
         using reflect;
 
         #partial switch v in type_info.variant {
+        case Type_Info_Boolean:
+            result, ok := val.value.(json.Boolean);
+            if !ok {
+                log_error_json("Incorrect Type. Type should be a boolean", path, val);
+                return false;
+            }
+            x := cast(^bool)value_ptr;
+            x^ = result;
         case Type_Info_Integer:
             result, ok := val.value.(json.Integer);
             if !ok {
@@ -432,12 +440,12 @@ load_from_json :: proc(asset: ^$T) -> bool {
 
     obj, ok := val.value.(json.Object);
     if !ok {
-        log_error_json("Initial type must be object", asset.path, val);
+        log_error_json("Initial type must be object", path, val);
         return false;
     }
 
     type_info := reflect.type_info_base(type_info_of(T));
-    unmarshal_struct(asset, type_info, asset.path, val);
+    unmarshal_struct(asset, type_info, path, val);
 
     return true;
 }

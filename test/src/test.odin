@@ -70,10 +70,10 @@ main :: proc() {
     asset.discover();
 
     // Make render pass
-    render_pass : gpu.Render_Pass;
+    render_pass : ^gpu.Render_Pass;
     {
         swapchain := &device.swapchain.(gpu.Swapchain);
-        format := swapchain.backbuffers[0].format;
+        format := swapchain.format;
 
         color := gpu.Attachment{ format = format };
 
@@ -82,7 +82,7 @@ main :: proc() {
         };
 
         render_pass = gpu.make_render_pass(device, desc);
-    }
+    } 
 
     vert_shader, frag_shader : ^gpu.Shader;
     found : bool;
@@ -93,18 +93,22 @@ main :: proc() {
     frag_shader, found = asset.acquire("assets/test.hlps", gpu.Shader);
     assert(found);
 
+    test_texture : ^gpu.Texture;
+    test_texture, found = asset.acquire("assets/test.texture", gpu.Texture);
+    assert(found);
+
     // Make graphics pipeline
-    pipeline : gpu.Pipeline;
+    pipeline : ^gpu.Pipeline;
     {
 
         shaders := []^gpu.Shader{ frag_shader, vert_shader };
-        pipeline_desc := gpu.make_pipeline_description(&render_pass, typeid_of(Vertex), shaders);
+        pipeline_desc := gpu.make_pipeline_description(render_pass, typeid_of(Vertex), shaders);
 
         pipeline = gpu.make_graphics_pipeline(device, pipeline_desc);
     }
 
     resource_set_pool := gpu.make_resource_set_pool(vert_shader, 1);
-    resource_set := gpu.allocate_resource_set(&resource_set_pool, 0);
+    resource_set := gpu.allocate_resource_set(resource_set_pool, 0);
 
     Constant_Buffer :: struct {
         projection, view, world : Matrix4,
@@ -132,7 +136,7 @@ main :: proc() {
     };
 
     // Make vertex buffer
-    vertex_buffer : gpu.Buffer;
+    vertex_buffer : ^gpu.Buffer;
     {
         desc := gpu.Buffer_Description{
             usage  = { .Vertex },
@@ -141,11 +145,10 @@ main :: proc() {
         };
 
         vertex_buffer = gpu.make_buffer(device, desc);
-        gpu.copy_to_buffer(&vertex_buffer, vertices);
+        gpu.copy_to_buffer(vertex_buffer, vertices);
     }
 
-    gfx_context := gpu.make_graphics_context(device);
-    gfx := &gfx_context;
+    gfx := gpu.make_graphics_context(device);
 
     core.show_window(&the_engine.window, true);
 
@@ -157,22 +160,19 @@ main :: proc() {
 
         x.projection, x.view = render_right_handed(engine.viewport());
 
-        gpu.copy_to_buffer(&constant_buffer, &x);
-        gpu.bind_to_set(&resource_set, constant_buffer);
-
+        gpu.copy_to_buffer(constant_buffer, &x);
+        gpu.bind_to_set(resource_set, constant_buffer);
 
         // Record command buffer
+        backbuffer, acquire_receipt := gpu.acquire_backbuffer(device);
         {
             gpu.record(gfx);
-
-            backbuffer := gpu.backbuffer(device);
             {
-                attachments := []^gpu.Texture{ backbuffer };
-                gpu.render_pass_scope(gfx, &render_pass, attachments);
+                gpu.render_pass_scope(gfx, render_pass, backbuffer);
 
-                gpu.bind_pipeline(gfx, &pipeline, v2(backbuffer.width, backbuffer.height));
+                gpu.bind_pipeline(gfx, pipeline, v2(backbuffer.width, backbuffer.height));
 
-                gpu.bind_resource_set(gfx, &resource_set);
+                gpu.bind_resource_set(gfx, resource_set);
 
                 gpu.bind_vertex_buffer(gfx, vertex_buffer);
                 
@@ -181,8 +181,10 @@ main :: proc() {
             gpu.resource_barrier(gfx, backbuffer, .Color_Attachment, .Present);
         }
 
-        gpu.submit(device, gfx);
-        gpu.display(device);
+        draw_receipt := gpu.submit(device, gfx, acquire_receipt);
+        gpu.display(device, draw_receipt);
+
+        gpu.wait(device);
     }
 }
 

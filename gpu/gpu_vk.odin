@@ -7,6 +7,8 @@ import "core:dynlib"
 import "core:log"
 import "core:reflect"
 import "core:runtime"
+import "core:os"
+import "core:sync"
 
 import "vk"
 import "../core"
@@ -30,8 +32,9 @@ instance_layers := [?]cstring{
 
 vk_format :: proc (format: Format) -> vk.Format {
     switch format {
-    case .RGB_U8:       return .R8G8B8_UINT;
-    case .RGBA_U8:      return .R8G8B8A8_UINT;
+    case .RGB_U8:       return .R8G8B8_UNORM;
+    case .RGB_U8_SRGB:  return .R8G8B8_SRGB;
+    case .RGBA_U8:      return .R8G8B8A8_UNORM;
     case .RGBA_U8_SRGB: return .R8G8B8A8_SRGB;
     case .RGBA_F16:     return .R16G16B16A16_SFLOAT;
     case .BGR_U8_SRGB:  return .B8G8R8A8_SRGB;
@@ -213,29 +216,21 @@ init_vulkan :: proc(the_window: ^core.Window) -> ^Device {
         vk.GetDeviceQueue(logical_gpu, surface_family_index, 0, &presentation_queue);
     }
 
-    // TEMP
-    // Make the command pool
-    {
-        create_info := vk.CommandPoolCreateInfo{
-            sType            = .COMMAND_POOL_CREATE_INFO,
-            flags            = { .RESET_COMMAND_BUFFER },
-            queueFamilyIndex = graphics_family_index,
-        };
+    thread_infos = make([]Thread_Info, 256);
 
-        result := vk.CreateCommandPool(logical_gpu, &create_info, nil, &graphics_command_pool);
-        assert(result == .SUCCESS);
-    }
-
-    recreate_swapchain(device, true);
-
+    receipt_semaphores = make([]vk.Semaphore, 256);
     {
         create_info := vk.SemaphoreCreateInfo{
             sType = .SEMAPHORE_CREATE_INFO,
         };
 
-        result := vk.CreateSemaphore(logical_gpu, &create_info, nil, &image_available);
-        assert(result == .SUCCESS);
+        for it in &receipt_semaphores {
+            result := vk.CreateSemaphore(logical_gpu, &create_info, nil, &it);
+            assert(result == .SUCCESS);
+        }
     }
+
+    recreate_swapchain(device, true);
 
     return device;
 }
@@ -247,6 +242,7 @@ init_vulkan :: proc(the_window: ^core.Window) -> ^Device {
 Swapchain :: struct {
     handle : vk.SwapchainKHR,
     extent : vk.Extent2D,
+    format : Format,
 
     backbuffers : []^Texture,
     current     : int,
@@ -285,14 +281,14 @@ recreate_swapchain :: proc(using device: ^Device, force := false) {
     formats := make([]vk.SurfaceFormatKHR, int(format_count), context.temp_allocator);
     vk.GetPhysicalDeviceSurfaceFormatsKHR(physical_gpu, state.surface, &format_count, &formats[0]);
 
-    format : ^vk.SurfaceFormatKHR;
+    surface_format : ^vk.SurfaceFormatKHR;
     for it in &formats {
         if it.format == .B8G8R8A8_SRGB && it.colorSpace == .SRGB_NONLINEAR {
-            format = &it;
+            surface_format = &it;
             break;
         }
     }
-    assert(format != nil);
+    assert(surface_format != nil);
 
     present_mode := vk.PresentModeKHR.FIFO;
 
@@ -303,13 +299,15 @@ recreate_swapchain :: proc(using device: ^Device, force := false) {
 
     using actual : Swapchain;
 
+    format = .BGR_U8_SRGB;
+
     // Make the swapchain object
     create_info := vk.SwapchainCreateInfoKHR{
         sType            = .SWAPCHAIN_CREATE_INFO_KHR,
         surface          = state.surface,
         minImageCount    = capabilities.minImageCount,
-        imageFormat      = format.format,
-        imageColorSpace  = format.colorSpace,
+        imageFormat      = surface_format.format,
+        imageColorSpace  = surface_format.colorSpace,
         imageExtent      = capabilities.currentExtent,
         imageArrayLayers = 1,
         imageUsage       = { .COLOR_ATTACHMENT },
@@ -388,58 +386,117 @@ Device :: struct {
     graphics_family_index : u32,
     surface_family_index  : u32,
 
-    // TODO: Think about job system and multi-threading
-    graphics_command_pool : vk.CommandPool,
+    // Custom per thread storage
+    thread_infos    : []Thread_Info,
+    thread_info_len : int, // Atomic
 
-    image_available : vk.Semaphore,
+    receipt_semaphores : []vk.Semaphore,
+    current_semaphore  : int, // Atomic
+
+    image_available : vk.Semaphore,    
 
     swapchain : Maybe(Swapchain),
 }
 
-backbuffer :: proc(using device: ^Device) -> ^Texture {
+Thread_Info :: struct {
+    thread_id : int,
+
+    graphics_pool : vk.CommandPool,
+    compute_pool  : vk.CommandPool,
+    transfer_pool : vk.CommandPool,
+}
+
+@private
+get_thread_info :: proc(using device: ^Device) -> ^Thread_Info {
+    thread_id := os.current_thread_id();
+
+    len := sync.atomic_load(&thread_info_len, .Relaxed);
+    for i := 0; i < len; i += 1 {
+        it := &thread_infos[i];
+
+        if it.thread_id == thread_id do return it;
+    }
+
+    index := sync.atomic_add(&thread_info_len, 1, .Relaxed);
+    
+    result := &thread_infos[index];
+    result.thread_id = thread_id;
+
+    return result;
+
+}
+
+@private
+acquire_semaphore :: proc(using device: ^Device) -> vk.Semaphore {
+    index := sync.atomic_add(&current_semaphore, 1, .Relaxed) % len(receipt_semaphores);
+
+    return receipt_semaphores[index];
+}
+
+acquire_backbuffer :: proc(using device: ^Device) -> (^Texture, Receipt) {
     actual := &swapchain.(Swapchain);
 
     image_index : u32;
 
-    result := vk.AcquireNextImageKHR(logical_gpu, actual.handle, (1 << 64 - 1), image_available, 0, &image_index);
+    signal := acquire_semaphore(device);
+
+    result := vk.AcquireNextImageKHR(logical_gpu, actual.handle, (1 << 64 - 1), signal, 0, &image_index);
     if result == .ERROR_OUT_OF_DATE_KHR || result == .SUBOPTIMAL_KHR {
         recreate_swapchain(device);
-        vk.AcquireNextImageKHR(logical_gpu, actual.handle, (1 << 64 - 1), image_available, 0, &image_index);
+        vk.AcquireNextImageKHR(logical_gpu, actual.handle, (1 << 64 - 1), signal, 0, &image_index);
     }
 
     actual.current = int(image_index);
 
-    return actual.backbuffers[actual.current];
+    return actual.backbuffers[actual.current], Receipt{ signal };
 }
 
-// TODO: Setup Reciepts 
-submit_multiple :: proc(using device: ^Device, contexts: []^Context) {
-    wait_stage : vk.PipelineStageFlags = { .COLOR_ATTACHMENT_OUTPUT };
+Receipt :: struct {
+    semaphore : vk.Semaphore,
+}
 
+submit_multiple :: proc(using device: ^Device, contexts: []^Context, wait_on: ..Receipt) -> Receipt {
     buffers := make([]vk.CommandBuffer, len(contexts), context.temp_allocator);
     for c, i in contexts do buffers[i] = c.command_buffer;
 
+    signal := acquire_semaphore(device);
+
     submit_info := vk.SubmitInfo{
         sType                = .SUBMIT_INFO,
-        waitSemaphoreCount   = 1,
-        pWaitSemaphores      = &image_available,
-        pWaitDstStageMask    = &wait_stage,
         commandBufferCount   = u32(len(buffers)),
         pCommandBuffers      = &buffers[0],
+        signalSemaphoreCount = 1,
+        pSignalSemaphores    = &signal,
     };
 
+    if len(wait_on) > 0 {
+        wait_semaphores := make([]vk.Semaphore, len(wait_on), context.temp_allocator);
+        wait_stages := make([]vk.PipelineStageFlags, len(wait_on), context.temp_allocator);
+
+        for it, i in wait_on {
+            wait_semaphores[i] = it.semaphore;
+            wait_stages[i] = { .BOTTOM_OF_PIPE };
+        }
+        
+        submit_info.waitSemaphoreCount = u32(len(wait_on));
+        submit_info.pWaitSemaphores    = &wait_semaphores[0];
+        submit_info.pWaitDstStageMask  = &wait_stages[0];
+    }
+
     vk.QueueSubmit(graphics_queue, 1, &submit_info, 0);
-    vk.QueueWaitIdle(graphics_queue);
+
+
+    return Receipt{ signal };
 }
 
-submit_single :: proc(using device: ^Device, ctx: ^Context) {
+submit_single :: proc(using device: ^Device, ctx: ^Context, wait_on: ..Receipt) -> Receipt {
     single := []^Context{ ctx };
-    submit_multiple(device, single);
+    return submit_multiple(device = device, contexts = single, wait_on = wait_on);
 }
 
 submit :: proc{ submit_multiple, submit_single };
 
-display :: proc(using device: ^Device) {
+display :: proc(using device: ^Device, wait_on: ..Receipt){
     if swapchain == nil do recreate_swapchain(device);
     actual := swapchain.(Swapchain);
 
@@ -452,12 +509,25 @@ display :: proc(using device: ^Device) {
         pImageIndices       = &index,
     };
 
+    if len(wait_on) > 0 {
+        wait_semaphores := make([]vk.Semaphore, len(wait_on), context.temp_allocator);
+
+        for it, i in wait_on do wait_semaphores[i] = it.semaphore;
+        
+        present_info.waitSemaphoreCount = u32(len(wait_on));
+        present_info.pWaitSemaphores    = &wait_semaphores[0];
+    }
+
     result := vk.QueuePresentKHR(presentation_queue, &present_info);
     if result == .ERROR_OUT_OF_DATE_KHR || result == .SUBOPTIMAL_KHR do recreate_swapchain(device);
+}
 
-    // TODO: Reciept system
+wait_on_queue :: proc(using device: ^Device) {
+    vk.QueueWaitIdle(graphics_queue);
     vk.QueueWaitIdle(presentation_queue);
 }
+
+wait :: proc{ wait_on_queue };
 
 //
 // Buffer Pass API
@@ -472,7 +542,7 @@ Buffer :: struct {
 }
 
 // TODO: Better device memory allocation
-make_buffer :: proc(using device: ^Device, desc: Buffer_Description) -> Buffer {
+make_buffer :: proc(using device: ^Device, desc: Buffer_Description) -> ^Buffer {
     usage : vk.BufferUsageFlags;
     if .Transfer_Src in desc.usage do usage |= { .TRANSFER_SRC };
     if .Transfer_Dst in desc.usage do usage |= { .TRANSFER_DST };
@@ -530,7 +600,8 @@ make_buffer :: proc(using device: ^Device, desc: Buffer_Description) -> Buffer {
 
     vk.BindBufferMemory(logical_gpu, handle, memory, 0);
 
-    buffer := Buffer{
+    buffer := new(Buffer);
+    buffer^ = Buffer{
         handle = handle,
         memory = memory,
         desc   = desc,
@@ -548,6 +619,8 @@ delete_buffer :: proc(using buffer: ^Buffer) {
 
     handle = 0;
     memory = 0;
+
+    free(buffer);
 }
 
 copy_to_buffer_array :: proc(using dst: ^Buffer, src: []$E) {
@@ -578,14 +651,187 @@ copy_to_buffer :: proc{ copy_to_buffer_array, copy_to_buffer_value };
 Texture :: struct {
     using asset : asset.Asset,
 
+    raw_path : string,
+    srgb     : bool,
+
     image  : vk.Image,
     view   : vk.ImageView,
     memory : vk.DeviceMemory,
 
-    format : Format,
-    width  : int,
-    height : int,
-    depth  : int,
+    using desc   : Texture_Description,
+}
+
+import "../deps/stb/stbi";
+
+register_texture :: proc() {
+    load :: proc(texture: ^Texture) -> bool {
+        ok := asset.load_from_json(texture, texture.path);
+        if !ok do return false;
+
+        source, found := os.read_entire_file(texture.raw_path);
+        if !found {
+            log.error("[Asset] Texture has invalid raw_path of \"{}\"", texture.raw_path);
+            return false;
+        }
+        defer(delete(source));
+
+        width, height, stride : i32;
+        pixels := stbi.load_from_memory(&source[0], i32(len(source)), &width, &height, &stride, 4);
+        if pixels == nil {
+            log.error("[Asset] Failed to decode raw from \"{}\"", texture.raw_path);
+            return false;
+        }
+
+        texture.width  = int(width);
+        texture.height = int(height);
+        texture.depth  = 1;
+
+        if texture.format == .Undefined {
+            switch stride {
+            case 3: 
+                if texture.srgb do texture.format = .RGB_U8_SRGB;
+                else do texture.format = .RGB_U8;
+            case 4: 
+                if texture.srgb do texture.format = .RGBA_U8_SRGB;
+                else do texture.format = .RGBA_U8;
+            case: unimplemented("Not supported yet");
+            }
+        } else {
+            assumed := format_stride(texture.format);
+            if int(stride) != assumed {
+                log.error("[Asset] Assumed format of {} does not align with raw with stride of {} bytes", texture.format, stride);
+                return false;
+            }
+        }
+
+        texture.memory_type = .Device_Local;
+        texture.usage = { .Transfer_Dst, .Sampled };
+
+        device := get().current;
+
+        contents := transmute([]byte)mem.Raw_Slice{ pixels, int(width * height * stride) };
+        contents_buffer := make_buffer(device, Buffer_Description{ 
+            usage  = { .Transfer_Src }, 
+            memory = .Host_Visible,
+            size   = len(contents),
+        });
+
+        init_texture(device, texture);
+
+        gfx := make_graphics_context(device);
+        {
+            record(gfx);
+
+            resource_barrier(gfx, texture, .Undefined, .Transfer_Dst);
+            copy(gfx, texture, contents_buffer);
+            resource_barrier(gfx, texture, .Transfer_Dst, .Shader_Read_Only);
+        }
+        submit(device, gfx);
+
+        return true;
+    }
+
+    unload :: proc(using texture: ^Texture) -> bool {
+        // INCOMPLETE
+        return true;
+    }
+
+    @static extensions := []string{
+        "texture",
+        "tex",
+    };
+
+    asset.register(Texture, extensions, auto_cast load, auto_cast unload);
+}
+
+init_texture :: proc(using device: ^Device, texture: ^Texture) {
+    type := vk.ImageType.D3;
+    if texture.depth == 1 {
+        type = .D2;
+        if texture.height == 1 {
+            type = .D1;
+        }
+    }
+
+    usage : vk.ImageUsageFlags;
+    if .Transfer_Src     in texture.usage do usage |= { .TRANSFER_SRC };
+    if .Transfer_Dst     in texture.usage do usage |= { .TRANSFER_DST };
+    if .Sampled          in texture.usage do usage |= { .SAMPLED };
+    if .Color_Attachment in texture.usage do usage |= { .COLOR_ATTACHMENT };
+    if .Depth_Attachment in texture.usage do usage |= { .DEPTH_STENCIL_ATTACHMENT };
+
+    extent := vk.Extent3D{
+        width  = u32(texture.width),
+        height = u32(texture.height),
+        depth  = u32(texture.depth),
+    };
+
+    create_info := vk.ImageCreateInfo{
+        sType       = .IMAGE_CREATE_INFO,
+        imageType   = type,
+        format      = vk_format(texture.format),
+        mipLevels   = 1,
+        arrayLayers = 1,
+        samples     = { ._1 },
+        tiling      = .OPTIMAL,
+        usage       = usage,
+        sharingMode = .EXCLUSIVE,
+        extent      = extent,
+    };
+
+    image : vk.Image;
+    result := vk.CreateImage(logical_gpu, &create_info, nil, &image);
+    assert(result == .SUCCESS);
+
+    // HACK: ALlocate unique DeviceMemory for each buffer. This will have to change
+    memory : vk.DeviceMemory;
+    {
+        properties : vk.MemoryPropertyFlags;
+
+        switch texture.memory_type {
+        case .Host_Visible: properties |= { .HOST_VISIBLE, .HOST_COHERENT };
+        case .Device_Local: properties |= { .DEVICE_LOCAL };
+        }
+
+        mem_requirements : vk.MemoryRequirements;
+        vk.GetImageMemoryRequirements(logical_gpu, image, &mem_requirements);
+
+        mem_properties : vk.PhysicalDeviceMemoryProperties;
+        vk.GetPhysicalDeviceMemoryProperties(physical_gpu, &mem_properties);
+
+        index := -1;
+        for i : u32 = 0; i < mem_properties.memoryTypeCount; i += 1 {
+            can_use := bool(mem_requirements.memoryTypeBits & (1 << i));
+            can_use &= mem_properties.memoryTypes[i].propertyFlags & properties != {};
+
+            if can_use {
+                index = int(i);
+                break;
+            }
+        }
+        assert(index != -1);
+
+        alloc_info := vk.MemoryAllocateInfo{
+            sType           = .MEMORY_ALLOCATE_INFO,
+            allocationSize  = mem_requirements.size,
+            memoryTypeIndex = u32(index),
+        };
+
+        result = vk.AllocateMemory(logical_gpu, &alloc_info, nil, &memory);
+        assert(result == .SUCCESS);
+    }
+
+    vk.BindImageMemory(logical_gpu, image, memory, 0);
+
+    texture.image = image;
+    texture.memory = memory; 
+}
+
+make_texture :: proc(using device: ^Device, desc: Texture_Description) -> ^Texture {
+    t := new(Texture);
+    t.desc = desc;
+    init_texture(device, t);
+    return t;
 }
 
 //
@@ -626,6 +872,30 @@ record :: proc(using ctx: ^Context) -> ^Context {
     begin(ctx);
     return ctx;
 }
+
+copy_buffer_to_texture :: proc(using ctx: ^Context, dst: ^Texture, src: ^Buffer) {
+    subresource := vk.ImageSubresourceLayers{
+        aspectMask      = { .COLOR },
+        mipLevel        = 0,
+        baseArrayLayer  = 0,
+        layerCount      = 1,
+    };
+
+    extent := vk.Extent3D{
+        width  = u32(dst.width),
+        height = u32(dst.height),
+        depth  = u32(dst.depth),
+    }; 
+
+    region := vk.BufferImageCopy{
+        imageSubresource = subresource,
+        imageExtent      = extent,
+    };
+
+    vk.CmdCopyBufferToImage(command_buffer, src.handle, dst.image, .TRANSFER_DST_OPTIMAL, 1, &region);
+}
+
+copy :: proc{ copy_buffer_to_texture };
 
 @private
 texture_layout_to_image_layout :: proc(layout: Texture_Layout) -> vk.ImageLayout {
@@ -690,10 +960,23 @@ resource_barrier :: proc{ resource_barrier_texture };
 
 Graphics_Context :: Context;
 
-make_graphics_context :: proc(using device: ^Device) -> Graphics_Context {
+make_graphics_context :: proc(using device: ^Device) -> ^Graphics_Context {
+    thread_info := get_thread_info(device);
+
+    if thread_info.graphics_pool == 0 {
+        create_info := vk.CommandPoolCreateInfo{
+            sType            = .COMMAND_POOL_CREATE_INFO,
+            flags            = { .RESET_COMMAND_BUFFER },
+            queueFamilyIndex = graphics_family_index,
+        };
+
+        result := vk.CreateCommandPool(logical_gpu, &create_info, nil, &thread_info.graphics_pool);
+        assert(result == .SUCCESS);
+    }
+
     alloc_info := vk.CommandBufferAllocateInfo{
         sType               = .COMMAND_BUFFER_ALLOCATE_INFO,
-        commandPool         = graphics_command_pool,
+        commandPool         = thread_info.graphics_pool,
         level               = .PRIMARY,
         commandBufferCount  = 1,
     };
@@ -702,18 +985,21 @@ make_graphics_context :: proc(using device: ^Device) -> Graphics_Context {
     result := vk.AllocateCommandBuffers(logical_gpu, &alloc_info, &handle);
     assert(result == .SUCCESS);
 
-    return Graphics_Context{
+    c := new(Graphics_Context);
+    c^ = Graphics_Context{
         command_buffer = handle,
         derived        = typeid_of(Graphics_Context),
         device         = device,
     };
+
+    return c;
 }
 
 delete_graphics_context :: proc(using ctx: ^Graphics_Context) {
     // UNIMPLEMENTED
 }
 
-begin_render_pass :: proc(using ctx: ^Context, render_pass: ^Render_Pass, attachments: []^Texture) {
+begin_render_pass :: proc(using ctx: ^Context, render_pass: ^Render_Pass, attachments: ..^Texture) {
     extent := vk.Extent2D{
         width  = u32(attachments[0].width),
         height = u32(attachments[0].height)
@@ -764,8 +1050,8 @@ end_render_pass :: proc(using ctx: ^Context) {
 }
 
 @(deferred_out=end_render_pass)
-render_pass_scope :: proc(using ctx: ^Context, render_pass: ^Render_Pass, attachments: []^Texture) -> ^Context {
-    begin_render_pass(ctx, render_pass, attachments);
+render_pass_scope :: proc(using ctx: ^Context, render_pass: ^Render_Pass, attachments: ..^Texture) -> ^Context {
+    begin_render_pass(ctx = ctx, render_pass = render_pass, attachments = attachments);
     return ctx;
 }
 
@@ -798,7 +1084,7 @@ bind_pipeline :: proc(using ctx: ^Context, pipeline: ^Pipeline, viewport: Vector
     }
 }
 
-bind_vertex_buffer :: proc(using ctx: ^Context, b: Buffer) {
+bind_vertex_buffer :: proc(using ctx: ^Context, b: ^Buffer) {
     b := b;
 
     offset : vk.DeviceSize;
@@ -826,7 +1112,7 @@ Render_Pass :: struct {
     device : ^Device,
 }
 
-make_render_pass :: proc(using device: ^Device, desc: Render_Pass_Description) -> Render_Pass {
+make_render_pass :: proc(using device: ^Device, desc: Render_Pass_Description) -> ^Render_Pass {
     color_refs := make([]vk.AttachmentReference, len(desc.colors), context.temp_allocator);
 
     num_attachments := len(desc.colors);
@@ -928,11 +1214,15 @@ make_render_pass :: proc(using device: ^Device, desc: Render_Pass_Description) -
     handle : vk.RenderPass;
     result := vk.CreateRenderPass(logical_gpu, &create_info, nil, &handle);
     assert(result == .SUCCESS);
-    return Render_Pass{
+
+    render_pass := new(Render_Pass);
+    render_pass^ = Render_Pass{
         handle = handle,
         desc   = desc,
         device = device,
     };
+
+    return render_pass;
 }
 
 delete_render_pass :: proc(using rp: ^Render_Pass) { 
@@ -1036,7 +1326,7 @@ Pipeline :: struct {
     description : Pipeline_Description,
 }
 
-make_graphics_pipeline :: proc(using device: ^Device, using description: Pipeline_Description) -> Pipeline {
+make_graphics_pipeline :: proc(using device: ^Device, using description: Pipeline_Description) -> ^Pipeline {
     assert(len(shaders) > 0);
 
     // Setup all the shader stages and load into a buffer. Also count the descriptor set layouts
@@ -1260,13 +1550,16 @@ make_graphics_pipeline :: proc(using device: ^Device, using description: Pipelin
     result = vk.CreateGraphicsPipelines(logical_gpu, 0, 1, &create_info, nil, &handle);
     assert(result == .SUCCESS);
 
-    return Pipeline{ 
+
+    pipeline := new(Pipeline);
+    pipeline^ = Pipeline{ 
         description = description, 
         handle      = handle, 
         device      = device,
         
         layout      = layout,
     };
+    return pipeline;
 }
 
 make_pipeline :: proc{ make_graphics_pipeline };
@@ -1276,7 +1569,7 @@ Resource_Set_Pool :: struct {
     shader : ^Shader,
 }
 
-make_resource_set_pool :: proc(using shader: ^Shader, auto_cast max_sets: int) -> Resource_Set_Pool {
+make_resource_set_pool :: proc(using shader: ^Shader, auto_cast max_sets: int) -> ^Resource_Set_Pool {
     num_uniforms := 0;
     for set in shader.reflect_sets {
         for i in 0..<int(set.binding_count) {
@@ -1305,7 +1598,10 @@ make_resource_set_pool :: proc(using shader: ^Shader, auto_cast max_sets: int) -
     result := vk.CreateDescriptorPool(device.logical_gpu, &create_info, nil, &handle);
     assert(result == .SUCCESS);
 
-    return Resource_Set_Pool{ handle = handle, shader = shader };
+    set_pool := new(Resource_Set_Pool);
+    set_pool^ = Resource_Set_Pool{ handle = handle, shader = shader };
+
+    return set_pool;
 }
 
 Resource_Set :: struct {
@@ -1313,7 +1609,7 @@ Resource_Set :: struct {
     pool   : ^Resource_Set_Pool,
 }
 
-allocate_resource_set :: proc(pool: ^Resource_Set_Pool, auto_cast set: int) -> Resource_Set {
+allocate_resource_set :: proc(pool: ^Resource_Set_Pool, auto_cast set: int) -> ^Resource_Set {
     alloc_info := vk.DescriptorSetAllocateInfo{
         sType = .DESCRIPTOR_SET_ALLOCATE_INFO,
         descriptorPool     = pool.handle,
@@ -1324,10 +1620,14 @@ allocate_resource_set :: proc(pool: ^Resource_Set_Pool, auto_cast set: int) -> R
     handle : vk.DescriptorSet;
     result := vk.AllocateDescriptorSets(pool.shader.device.logical_gpu, &alloc_info, &handle);
     assert(result == .SUCCESS);
-    return Resource_Set{ handle = handle, pool = pool, };
+
+    set := new(Resource_Set);;
+    set^ = Resource_Set{ handle = handle, pool = pool, };
+
+    return set;
 }
 
-bind_buffer_to_set :: proc(using set: ^Resource_Set, buffer: Buffer, auto_cast binding : int = 0) {
+bind_buffer_to_set :: proc(using set: ^Resource_Set, buffer: ^Buffer, auto_cast binding : int = 0) {
     buffer_info := vk.DescriptorBufferInfo{
         buffer = buffer.handle,
         offset = 0,

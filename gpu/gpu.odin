@@ -68,6 +68,7 @@ init :: proc(window: ^core.Window) -> ^Device {
 
     // Register assets
     register_shader();
+    register_texture();
 
     return result;
 }
@@ -129,7 +130,7 @@ Memory_Type :: enum {
 // Capable of recording graphics and compute work. Child of Context
 // Graphics_Context :: struct { ... }
 
-// make_graphics_context :: proc(using device: ^Device) -> Graphics_Context
+// make_graphics_context :: proc(using device: ^Device) -> ^Graphics_Context
 // delete_graphics_context :: proc(using ctx: ^Graphics_Context)
 
 //
@@ -170,10 +171,46 @@ Buffer_Description :: struct {
 // Buffer :: struct { ... }
 
 // Creates a buffer object on the given device. Buffer is defined from the given description
-// make_buffer :: proc(using device: ^Device, desc: Buffer_Description) -> Buffer
+// make_buffer :: proc(using device: ^Device, desc: Buffer_Description) -> ^Buffer
 
 // Destroys api specific buffer objects and resets struct memory
 // delete_buffer :: proc(using buffer: ^Buffer)
+
+//
+// Texture API
+////////////////////////////////////////////////////
+
+// TODO: Document
+Texture_Usage :: enum {
+    Transfer_Src,
+    Transfer_Dst,
+    Sampled,
+    Color_Attachment,
+    Depth_Attachment,
+}
+
+// TODO: Document
+Texture_Description :: struct {
+    usage       : bit_set[Texture_Usage],
+    memory_type : Memory_Type,
+
+    format : Format,
+
+    width  : int,
+    height : int,
+    depth  : int,
+}
+
+Texture_Layout :: enum {
+    Undefined,
+    General,
+    Color_Attachment,
+    Depth_Attachment,
+    Transfer_Src,
+    Transfer_Dst,
+    Shader_Read_Only,
+    Present,
+}
 
 //
 // Render Pass API
@@ -187,6 +224,11 @@ Render_Pass_Description :: struct {
     colors : []Attachment,
     depth  : Maybe(Attachment),
 }
+
+
+//
+// Pipeline API
+////////////////////////////////////////////////////
 
 // All supported types of shaders
 Shader_Type :: enum {
@@ -205,28 +247,31 @@ Vertex_Attributes :: union {
     Linear_Color,
 }
 
-// All supported types that can be a uniform
-Uniforms :: union {
-    i32,
-    f32,
-    Vector2,
-    Vector3,
-    Vector4,
-    Matrix4,
-    Linear_Color,
-    // ^Texture2d,
-}
-
 Format :: enum {
     Undefined,
 
     RGB_U8,
+    RGB_U8_SRGB,
     RGBA_U8,
     RGBA_U8_SRGB,
     
     RGBA_F16,
 
     BGR_U8_SRGB,
+}
+
+// Returns the stride in bytes of each format
+format_stride :: proc(format: Format) -> int {
+    switch format {
+    case .Undefined:     return 0;
+    case .RGB_U8:        return 3;
+    case .RGB_U8_SRGB:   return 3;
+    case .RGBA_U8:       return 4;
+    case .RGBA_U8_SRGB:  return 4;
+    case .RGBA_F16:      return 64;
+    case .BGR_U8_SRGB:   return 3;
+    case: unreachable();
+    }
 }
 
 // All supported texture wraps
@@ -358,66 +403,3 @@ make_pipeline_description_graphics :: proc(render_pass: ^Render_Pass, vertex: ty
 }
 
 make_pipeline_description :: proc{ make_pipeline_description_graphics };
-
-Command_Allocator_Type :: enum {
-    Graphics,
-}
-
-Texture_Layout :: enum {
-    Undefined,
-    General,
-    Color_Attachment,
-    Depth_Attachment,
-    Transfer_Src,
-    Transfer_Dst,
-    Shader_Read_Only,
-    Present,
-}
-
-
-// Texture2d_Shared :: struct {
-//     using asset : asset.Asset,
-
-//     data_path : string,
-//     srgb      : bool,
-// }
-
-// import "../deps/stb/stbi"
-// import "core:os"
-
-// register_texture2d :: proc() {
-//     load :: proc(tex: ^Texture2d) -> bool {
-//         ok := asset.load_from_json(tex);
-//         if !ok do return false;
-
-//         raw, found := os.read_entire_file(tex.data_path);
-//         if !found do return false; // TODO: Cleanup data loaded from json
-//         defer delete(raw);
-
-//         width, height, depth : i32;
-//         pixels := stbi.load_from_memory(&raw[0], i32(len(raw)), &width, &height, &depth, 0);
-//         if pixels == nil do return false; // TODO: Cleanup data loaded from json
-
-//         tex.pixels = mem.slice_ptr(pixels, (int)(width * height * depth));
-//         tex.width  = int(width);
-//         tex.height = int(height);
-//         tex.depth  = int(depth);
-
-//         // TODO: Loading the actual texture
-
-//         return true;
-//     }
-
-//     unload :: proc(using tex: ^Texture2d) -> bool {
-//         // INCOMPLETE
-//         return true;
-//     }
-
-//     @static extensions := []string{
-//         "tex2d",
-//         "texture2d",
-//         "t2d",
-//     };
-
-//     asset.register(Texture2d, extensions, auto_cast load, auto_cast unload);
-// }
