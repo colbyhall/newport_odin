@@ -1,7 +1,16 @@
+// Texture2D    color_texture : register(t1);
+// SamplerState color_sampler : register(s1);
+
 struct Pixel_Input {
+    float2 uv0   : TEXCOORD0;
+    float2 uv1   : TEXCOORD1;
     float4 color : COLOR;
 };
 
 float4 main( Pixel_Input IN ) : SV_TARGET {
+
+    // float4 color = color_texture.Sample(color_sampler, IN.uv0);
+    // return color;
+
     return IN.color;
 }

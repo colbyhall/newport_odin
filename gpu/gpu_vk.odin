@@ -9,6 +9,7 @@ import "core:reflect"
 import "core:runtime"
 import "core:os"
 import "core:sync"
+import "core:slice"
 
 import "vk"
 import "../core"
@@ -142,10 +143,23 @@ init_vulkan :: proc(the_window: ^core.Window) -> ^Device {
             features : vk.PhysicalDeviceFeatures;
             vk.GetPhysicalDeviceFeatures(device, &features);
 
+            // Check for features that we need for bindlesss http://roar11.com/2019/06/vulkan-textures-unbound/
+            indexing_features := vk.PhysicalDeviceDescriptorIndexingFeatures{
+                sType = .PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT,
+            };
+
+            device_features := vk.PhysicalDeviceFeatures2{
+                sType = .PHYSICAL_DEVICE_FEATURES_2,
+                pNext = &indexing_features,
+            };
+            vk.GetPhysicalDeviceFeatures2(device, &device_features);
+
             // TODO(colby): Maybe do more checking with features we actually will need like KHR Swapchain support?
-            if properties.deviceType == .DISCRETE_GPU && features.geometryShader {
-                selected_gpu = device;
-            }
+            is_acceptable : b32 = true;
+            is_acceptable = is_acceptable && properties.deviceType == .DISCRETE_GPU && features.geometryShader;
+            is_acceptable = is_acceptable && indexing_features.descriptorBindingPartiallyBound && indexing_features.runtimeDescriptorArray;
+
+            if is_acceptable do selected_gpu = device;
         }
 
         assert(selected_gpu != nil);
@@ -198,8 +212,15 @@ init_vulkan :: proc(the_window: ^core.Window) -> ^Device {
             vk.KHR_SWAPCHAIN_EXTENSION_NAME,
         };
 
+        indexing_features := vk.PhysicalDeviceDescriptorIndexingFeatures{
+            sType = .PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT,
+            descriptorBindingPartiallyBound = true,
+            runtimeDescriptorArray          = true,
+        };
+
         logical_device_create_info := vk.DeviceCreateInfo{
             sType                   = .DEVICE_CREATE_INFO,
+            pNext                   = &indexing_features,
             queueCreateInfoCount    = u32(len(queue_create_infos)),
             pQueueCreateInfos       = &queue_create_infos[0],
             enabledLayerCount       = u32(len(instance_layers)),
@@ -231,6 +252,96 @@ init_vulkan :: proc(the_window: ^core.Window) -> ^Device {
     }
 
     recreate_swapchain(device, true);
+
+    // Bindless layout
+    {
+        bindless_layout := []vk.DescriptorSetLayoutBinding{
+            {
+                binding         = 0, 
+                descriptorType  = .STORAGE_BUFFER,
+                descriptorCount = 1000,
+                stageFlags      = { ._MAX },
+            },
+            {
+                binding         = 1, 
+                descriptorType  = .SAMPLED_IMAGE,
+                descriptorCount = 1000,
+                stageFlags      = { ._MAX },
+            },
+            {
+                binding         = 2, 
+                descriptorType  = .SAMPLER,
+                descriptorCount = 1000,
+                stageFlags      = { ._MAX },
+            },
+            // {
+            //     binding         = 3, 
+            //     descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            //     descriptorCount = 1000,
+            //     stageFlags      = { ._MAX },
+            // },
+        };
+
+        // Bindless settings extension stuff
+        bind_flag : vk.DescriptorBindingFlags = { .PARTIALLY_BOUND_EXT };
+
+        extension := vk.DescriptorSetLayoutBindingFlagsCreateInfo{
+            sType         = .DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO_EXT,
+            bindingCount  = 1,
+            pBindingFlags = &bind_flag,
+        };
+
+        create_info := vk.DescriptorSetLayoutCreateInfo{
+            sType        = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            pNext        = &extension,
+            bindingCount = u32(len(bindless_layout)),
+            pBindings    = &bindless_layout[0],
+        };
+
+        result := vk.CreateDescriptorSetLayout(logical_gpu, &create_info, nil, &descriptor_layout);
+        assert(result == .SUCCESS);
+    }
+
+    // Bindless Descriptor Pool
+    {
+        pool_sizes := []vk.DescriptorPoolSize{
+            {
+                type            = .STORAGE_BUFFER,
+                descriptorCount = 1,    
+            },
+            {
+                type            = .SAMPLED_IMAGE,
+                descriptorCount = 1,
+            },
+            {
+                type            = .SAMPLER,
+                descriptorCount = 1,
+            }
+        };
+
+        create_info := vk.DescriptorPoolCreateInfo{
+            sType           = .DESCRIPTOR_POOL_CREATE_INFO,
+            poolSizeCount   = u32(len(pool_sizes)),
+            pPoolSizes      = &pool_sizes[0],
+            maxSets         = 1,
+        };
+
+        result := vk.CreateDescriptorPool(logical_gpu, &create_info, nil, &descriptor_pool);
+        assert(result == .SUCCESS);
+    }
+
+    // Bindless Descriptor Set
+    {
+        alloc_info := vk.DescriptorSetAllocateInfo{
+            sType              = .DESCRIPTOR_SET_ALLOCATE_INFO,
+            descriptorPool     = descriptor_pool,
+            descriptorSetCount = 1,
+            pSetLayouts        = &descriptor_layout,
+        };
+
+        result := vk.AllocateDescriptorSets(logical_gpu, &alloc_info, &descriptor_set);
+        assert(result == .SUCCESS);
+    }
 
     return device;
 }
@@ -394,6 +505,10 @@ Device :: struct {
     current_semaphore  : int, // Atomic
 
     image_available : vk.Semaphore,    
+
+    descriptor_pool   : vk.DescriptorPool,
+    descriptor_set    : vk.DescriptorSet,
+    descriptor_layout : vk.DescriptorSetLayout,
 
     swapchain : Maybe(Swapchain),
 }
@@ -651,11 +766,16 @@ copy_to_buffer :: proc{ copy_to_buffer_array, copy_to_buffer_value };
 Texture :: struct {
     using asset : asset.Asset,
 
-    raw_path : string,
-    srgb     : bool,
+    raw_path    : string,
+    srgb        : bool,
+    wrap        : Texture_Wrap,
+    min_filter  : Texture_Filter,
+    mag_filter  : Texture_Filter,
 
-    image  : vk.Image,
-    view   : vk.ImageView,
+    image   : vk.Image,
+    view    : vk.ImageView,
+    sampler : vk.Sampler,
+
     memory : vk.DeviceMemory,
 
     using desc   : Texture_Description,
@@ -766,22 +886,25 @@ init_texture :: proc(using device: ^Device, texture: ^Texture) {
         depth  = u32(texture.depth),
     };
 
-    create_info := vk.ImageCreateInfo{
-        sType       = .IMAGE_CREATE_INFO,
-        imageType   = type,
-        format      = vk_format(texture.format),
-        mipLevels   = 1,
-        arrayLayers = 1,
-        samples     = { ._1 },
-        tiling      = .OPTIMAL,
-        usage       = usage,
-        sharingMode = .EXCLUSIVE,
-        extent      = extent,
-    };
 
     image : vk.Image;
-    result := vk.CreateImage(logical_gpu, &create_info, nil, &image);
-    assert(result == .SUCCESS);
+    {
+        create_info := vk.ImageCreateInfo{
+            sType       = .IMAGE_CREATE_INFO,
+            imageType   = type,
+            format      = vk_format(texture.format),
+            mipLevels   = 1,
+            arrayLayers = 1,
+            samples     = { ._1 },
+            tiling      = .OPTIMAL,
+            usage       = usage,
+            sharingMode = .EXCLUSIVE,
+            extent      = extent,
+        };
+
+        result := vk.CreateImage(logical_gpu, &create_info, nil, &image);
+        assert(result == .SUCCESS);
+    }
 
     // HACK: ALlocate unique DeviceMemory for each buffer. This will have to change
     memory : vk.DeviceMemory;
@@ -817,13 +940,76 @@ init_texture :: proc(using device: ^Device, texture: ^Texture) {
             memoryTypeIndex = u32(index),
         };
 
-        result = vk.AllocateMemory(logical_gpu, &alloc_info, nil, &memory);
+        result := vk.AllocateMemory(logical_gpu, &alloc_info, nil, &memory);
         assert(result == .SUCCESS);
     }
 
     vk.BindImageMemory(logical_gpu, image, memory, 0);
 
+    view : vk.ImageView;
+    {
+        view_type := vk.ImageViewType.D3;
+        if texture.depth == 1 {
+            view_type = .D2;
+            if texture.height == 1 {
+                view_type = .D1;
+            }
+        }
+
+        subresource := vk.ImageSubresourceRange{
+            aspectMask      = { .COLOR },
+            levelCount      = 1,
+            layerCount      = 1,
+        };
+
+        create_info := vk.ImageViewCreateInfo{
+            sType            = .IMAGE_VIEW_CREATE_INFO,
+            image            = image,
+            viewType         = view_type,
+            format           = vk_format(texture.format),
+            subresourceRange = subresource,
+        };
+
+        result := vk.CreateImageView(logical_gpu, &create_info, nil, &view);
+        assert(result == .SUCCESS);
+    }
+
+    sampler : vk.Sampler;
+    {
+        texture_filter_to_vk :: proc(filter: Texture_Filter) -> vk.Filter{
+            switch filter {
+            case .Nearest: return .NEAREST;
+            case .Linear:  return .LINEAR;
+            case: unreachable();
+            }
+        }
+        min_filter := texture_filter_to_vk(texture.min_filter);
+        mag_filter := texture_filter_to_vk(texture.mag_filter);
+
+        wrap : vk.SamplerAddressMode;
+        switch texture.wrap {
+        case .Clamp:  wrap = .CLAMP_TO_EDGE;
+        case .Repeat: wrap = .REPEAT;
+        }
+
+        create_info := vk.SamplerCreateInfo{
+            sType           = .SAMPLER_CREATE_INFO,
+            magFilter       = mag_filter,
+            minFilter       = min_filter,
+            addressModeU    = wrap,
+            addressModeV    = wrap,
+            addressModeW    = wrap, 
+            borderColor     = .INT_OPAQUE_BLACK,
+        };
+
+        result := vk.CreateSampler(logical_gpu, &create_info, nil, &sampler);
+        assert(result == .SUCCESS);
+    }
+
     texture.image = image;
+    texture.view  = view;
+    texture.sampler = sampler;
+
     texture.memory = memory; 
 }
 
@@ -846,7 +1032,7 @@ Context :: struct {
     framebuffers   : [dynamic]vk.Framebuffer,
 
     current_render_pass : ^Render_Pass,
-    current_pipeline    : ^Pipeline,
+    current_attachments : []^Texture,
 }
 
 begin :: proc(using ctx: ^Context) {
@@ -1006,6 +1192,8 @@ begin_render_pass :: proc(using ctx: ^Context, render_pass: ^Render_Pass, attach
     };
 
     current_render_pass = render_pass;
+    current_attachments = make([]^Texture, len(attachments));
+    for it, i in attachments do current_attachments[i] = it;
 
     render_area := vk.Rect2D{ extent = extent };
 
@@ -1046,7 +1234,7 @@ end_render_pass :: proc(using ctx: ^Context) {
     vk.CmdEndRenderPass(command_buffer);
 
     current_render_pass = nil;
-    current_pipeline    = nil;
+    delete(current_attachments);
 }
 
 @(deferred_out=end_render_pass)
@@ -1057,7 +1245,7 @@ render_pass_scope :: proc(using ctx: ^Context, render_pass: ^Render_Pass, attach
 
 bind_pipeline :: proc(using ctx: ^Context, pipeline: ^Pipeline, viewport: Vector2, scissor: Maybe(Rect) = nil) {
     vk.CmdBindPipeline(command_buffer, .GRAPHICS, pipeline.handle);
-    current_pipeline = pipeline;
+    vk.CmdBindDescriptorSets(command_buffer, .GRAPHICS, pipeline.layout, 0, 1, &device.descriptor_set, 0, nil);
 
     vk_viewport := vk.Viewport{
         width    = viewport.x,
@@ -1095,10 +1283,50 @@ draw :: proc(using ctx: ^Context, auto_cast vertex_count: int, auto_cast first_v
     vk.CmdDraw(command_buffer, u32(vertex_count), 1, u32(first_vertex), 0);
 }
 
-bind_resource_set :: proc(using ctx: ^Context, set: ^Resource_Set) {
-    assert(current_pipeline != nil, "Pipeline must be bound to bind resource set");
+// bind_resource_set :: proc(using ctx: ^Context, set: ^Resource_Set, bind: int) {
+//     assert(current_pipeline != nil, "Pipeline must be bound to bind resource set");
 
-    vk.CmdBindDescriptorSets(command_buffer, .GRAPHICS, current_pipeline.layout, 0, 1, &set.handle, 0, nil);
+//     vk.CmdBindDescriptorSets(command_buffer, .GRAPHICS, current_pipeline.layout, u32(bind), 1, &set.handle, 0, nil);
+// }
+
+clear :: proc(using ctx: ^Context, color: Linear_Color, attachments: ..^Texture) {
+    assert(len(current_attachments) > 0);
+
+    clear_attachments := make([]vk.ClearAttachment, len(attachments), context.temp_allocator);
+    for it, i in attachments {
+        
+        index := -1;
+        for a, y in current_attachments {
+            if a == it {
+                index = y;
+                break;
+            }
+        }
+        assert(index != -1);
+
+        clear_color_value : vk.ClearColorValue;
+        clear_color_value.float32[0] = color.r;
+        clear_color_value.float32[1] = color.g;
+        clear_color_value.float32[2] = color.b;
+        clear_color_value.float32[3] = color.a;
+
+        clear_value : vk.ClearValue;
+        clear_value.color = clear_color_value;
+
+        clear_attachments[i] = vk.ClearAttachment{
+            aspectMask      = { .COLOR },
+            colorAttachment = u32(index),
+            clearValue      = clear_value,
+        };
+    }
+
+    extent := vk.Extent2D{ u32(attachments[0].width), u32(attachments[0].height) };
+    clear_rect := vk.ClearRect{
+        rect       = vk.Rect2D{ extent = extent },
+        layerCount = 1,
+    };
+
+    vk.CmdClearAttachments(command_buffer, u32(len(attachments)), &clear_attachments[0], 1, &clear_rect);
 }
 
 //
@@ -1261,43 +1489,62 @@ import "core:fmt"
 
 init_shader :: proc(using device: ^Device, shader: ^Shader, contents: []byte) {
     // Use Spirv Reflect to retrieve Descriptor info and then build the descriptor layouts
-    result := spv_reflect.CreateShaderModule(auto_cast len(contents), &contents[0], &shader.reflect_module);
-    assert(result == .SUCCESS);
+    // result := spv_reflect.CreateShaderModule(auto_cast len(contents), &contents[0], &shader.reflect_module);
+    // assert(result == .SUCCESS);
 
-    count : u32;
-    result = spv_reflect.EnumerateDescriptorSets(&shader.reflect_module, &count, nil);
-    assert(result == .SUCCESS);
+    // count : u32;
+    // result = spv_reflect.EnumerateDescriptorSets(&shader.reflect_module, &count, nil);
+    // assert(result == .SUCCESS);
 
-    if count > 0 {
-        shader.reflect_sets = make([]^spv_reflect.DescriptorSet, int(count));
+    // if count > 0 {
+    //     shader.reflect_sets = make([]^spv_reflect.DescriptorSet, int(count));
         
-        result = spv_reflect.EnumerateDescriptorSets(&shader.reflect_module, &count, &shader.reflect_sets[0]);
-        assert(result == .SUCCESS);
+    //     result = spv_reflect.EnumerateDescriptorSets(&shader.reflect_module, &count, &shader.reflect_sets[0]);
+    //     assert(result == .SUCCESS);
 
-        shader.sets = make([]vk.DescriptorSetLayout, int(count));
-        for it, i in shader.reflect_sets {
-            bindings := make([]vk.DescriptorSetLayoutBinding, int(it.binding_count), context.temp_allocator);
-            for binding, i in &bindings {
-                actual := mem.ptr_offset(it.bindings, i)^;
+    //     shader.sets = make([]vk.DescriptorSetLayout, int(count));
+    //     for it, i in shader.reflect_sets {
+    //         bindings := make([]vk.DescriptorSetLayoutBinding, int(it.binding_count), context.temp_allocator);
 
-                binding.binding         = actual.binding;
-                binding.descriptorType  = auto_cast actual.descriptor_type;
-                binding.descriptorCount = actual.count;
+    //         at := 0;            
+    //         for _, i in bindings {
+    //             actual := mem.ptr_offset(it.bindings, i)^;
 
-                stage := shader_type_to_shader_stage(shader.type);
-                binding.stageFlags = { stage };
-            }
+    //             binding := &bindings[at];
 
-            create_info := vk.DescriptorSetLayoutCreateInfo{
-                sType        = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-                bindingCount = it.binding_count,
-                pBindings    = &bindings[0],
-            };
+    //             binding.binding         = actual.binding;
+    //             binding.descriptorType  = auto_cast actual.descriptor_type;
+    //             binding.descriptorCount = actual.count;
 
-            result := vk.CreateDescriptorSetLayout(logical_gpu, &create_info, nil, &shader.sets[i]);
-            assert(result == .SUCCESS);
-        }
-    }
+    //             if i > 0  {
+    //                 previous := mem.ptr_offset(it.bindings, i - 1)^;
+
+    //                 if actual.descriptor_type == .SAMPLER && previous.descriptor_type == .SAMPLED_IMAGE {
+    //                     count -= 1;
+    //                     break;
+    //                 }
+    //             }
+                
+    //             if actual.descriptor_type == .SAMPLED_IMAGE {
+    //                 binding.descriptorType = .COMBINED_IMAGE_SAMPLER;
+    //             }
+
+    //             at += 1;
+
+    //             stage := shader_type_to_shader_stage(shader.type);
+    //             binding.stageFlags = { stage };
+    //         }
+
+    //         create_info := vk.DescriptorSetLayoutCreateInfo{
+    //             sType        = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+    //             bindingCount = u32(at),
+    //             pBindings    = &bindings[0],
+    //         };
+
+    //         result := vk.CreateDescriptorSetLayout(logical_gpu, &create_info, nil, &shader.sets[i]);
+    //         assert(result == .SUCCESS);
+    //     }
+    // }
 
     // Create the actual vulkan shader module
     {
@@ -1508,21 +1755,11 @@ make_graphics_pipeline :: proc(using device: ^Device, using description: Pipelin
         pDynamicStates      = &dynamic_states[0],
     };
 
-    set_layouts := make([]vk.DescriptorSetLayout, num_set_layouts, context.temp_allocator);
-    num_set_layouts = 0;
-    for it in shaders {
-        for set in it.sets {
-            set_layouts[num_set_layouts] = set;
-            num_set_layouts += 1;
-        }
-    }
-
     pipeline_layout_info := vk.PipelineLayoutCreateInfo{
         sType          = .PIPELINE_LAYOUT_CREATE_INFO,
-        setLayoutCount = u32(num_set_layouts),
+        setLayoutCount = 1,
+        pSetLayouts    = &descriptor_layout,
     };
-
-    if num_set_layouts > 0 do pipeline_layout_info.pSetLayouts = &set_layouts[0];
 
     layout : vk.PipelineLayout;
     result := vk.CreatePipelineLayout(logical_gpu, &pipeline_layout_info, nil, &layout);
@@ -1564,88 +1801,117 @@ make_graphics_pipeline :: proc(using device: ^Device, using description: Pipelin
 
 make_pipeline :: proc{ make_graphics_pipeline };
 
-Resource_Set_Pool :: struct {
-    handle : vk.DescriptorPool,
-    shader : ^Shader,
-}
+// Resource_Set_Pool :: struct {
+//     handle : vk.DescriptorPool,
+//     shader : ^Shader,
+// }
 
-make_resource_set_pool :: proc(using shader: ^Shader, auto_cast max_sets: int) -> ^Resource_Set_Pool {
-    num_uniforms := 0;
-    for set in shader.reflect_sets {
-        for i in 0..<int(set.binding_count) {
-            binding := mem.ptr_offset(set.bindings, i)^;
+// make_resource_set_pool :: proc(using shader: ^Shader, auto_cast max_sets: int) -> ^Resource_Set_Pool {
+//     num_uniforms := 0;
+//     num_combined := 0;
+//     for set in shader.reflect_sets {
+//         for i in 0..<int(set.binding_count) {
+//             binding := mem.ptr_offset(set.bindings, i)^;
 
-            #partial switch binding.descriptor_type {
-            case .UNIFORM_BUFFER: num_uniforms += 1;
-            case: unimplemented();
-            }
-        }
-    }
+//             #partial switch binding.descriptor_type {
+//             case .UNIFORM_BUFFER: num_uniforms += 1;
+//             case .SAMPLED_IMAGE: num_combined += 1;
+//             case .SAMPLER: // Do Nothing
+//             case: unimplemented();
+//             }
+//         }
+//     }
 
-    uniform_pool_size := vk.DescriptorPoolSize{
-        type = .UNIFORM_BUFFER,
-        descriptorCount = u32(num_uniforms),
-    };
+//     uniform_pool_size := vk.DescriptorPoolSize{
+//         type = .UNIFORM_BUFFER,
+//         descriptorCount = u32(num_uniforms),
+//     };
 
-    create_info := vk.DescriptorPoolCreateInfo{
-        sType           = .DESCRIPTOR_POOL_CREATE_INFO,
-        poolSizeCount   = 1,
-        pPoolSizes      = &uniform_pool_size,
-        maxSets         = u32(max_sets),
-    };
+//     combined_pool_size := vk.DescriptorPoolSize{
+//         type = .COMBINED_IMAGE_SAMPLER,
+//         descriptorCount = u32(num_combined),
+//     };
 
-    handle : vk.DescriptorPool;
-    result := vk.CreateDescriptorPool(device.logical_gpu, &create_info, nil, &handle);
-    assert(result == .SUCCESS);
+//     pool_sizes := []vk.DescriptorPoolSize{ uniform_pool_size, combined_pool_size };
 
-    set_pool := new(Resource_Set_Pool);
-    set_pool^ = Resource_Set_Pool{ handle = handle, shader = shader };
+//     create_info := vk.DescriptorPoolCreateInfo{
+//         sType           = .DESCRIPTOR_POOL_CREATE_INFO,
+//         poolSizeCount   = u32(len(pool_sizes)),
+//         pPoolSizes      = &pool_sizes[0],
+//         maxSets         = u32(max_sets),
+//     };
 
-    return set_pool;
-}
+//     handle : vk.DescriptorPool;
+//     result := vk.CreateDescriptorPool(device.logical_gpu, &create_info, nil, &handle);
+//     assert(result == .SUCCESS);
 
-Resource_Set :: struct {
-    handle : vk.DescriptorSet,
-    pool   : ^Resource_Set_Pool,
-}
+//     set_pool := new(Resource_Set_Pool);
+//     set_pool^ = Resource_Set_Pool{ handle = handle, shader = shader };
 
-allocate_resource_set :: proc(pool: ^Resource_Set_Pool, auto_cast set: int) -> ^Resource_Set {
-    alloc_info := vk.DescriptorSetAllocateInfo{
-        sType = .DESCRIPTOR_SET_ALLOCATE_INFO,
-        descriptorPool     = pool.handle,
-        descriptorSetCount = 1,
-        pSetLayouts        = &pool.shader.sets[set],
-    };
+//     return set_pool;
+// }
 
-    handle : vk.DescriptorSet;
-    result := vk.AllocateDescriptorSets(pool.shader.device.logical_gpu, &alloc_info, &handle);
-    assert(result == .SUCCESS);
+// Resource_Set :: struct {
+//     handle : vk.DescriptorSet,
+//     pool   : ^Resource_Set_Pool,
+// }
 
-    set := new(Resource_Set);;
-    set^ = Resource_Set{ handle = handle, pool = pool, };
+// allocate_resource_set :: proc(pool: ^Resource_Set_Pool, auto_cast set: int) -> ^Resource_Set {
+//     alloc_info := vk.DescriptorSetAllocateInfo{
+//         sType = .DESCRIPTOR_SET_ALLOCATE_INFO,
+//         descriptorPool     = pool.handle,
+//         descriptorSetCount = 1,
+//         pSetLayouts        = &pool.shader.sets[set],
+//     };
 
-    return set;
-}
+//     handle : vk.DescriptorSet;
+//     result := vk.AllocateDescriptorSets(pool.shader.device.logical_gpu, &alloc_info, &handle);
+//     assert(result == .SUCCESS);
 
-bind_buffer_to_set :: proc(using set: ^Resource_Set, buffer: ^Buffer, auto_cast binding : int = 0) {
-    buffer_info := vk.DescriptorBufferInfo{
-        buffer = buffer.handle,
-        offset = 0,
-        range  = vk.DeviceSize(buffer.desc.size),
-    };
+//     set := new(Resource_Set);
+//     set^ = Resource_Set{ handle = handle, pool = pool, };
 
-    set_write := vk.WriteDescriptorSet{
-        sType           = .WRITE_DESCRIPTOR_SET,
-        dstSet          = handle,
-        dstBinding      = u32(binding),
-        descriptorType  = .UNIFORM_BUFFER,
-        descriptorCount = 1,
-        pBufferInfo     = &buffer_info,
-    };
+//     return set;
+// }
 
-    vk.UpdateDescriptorSets(pool.shader.device.logical_gpu, 1, &set_write, 0, nil);
-}
+// bind_buffer_to_set :: proc(using set: ^Resource_Set, buffer: ^Buffer, auto_cast binding : int = 0) {
+//     buffer_info := vk.DescriptorBufferInfo{
+//         buffer = buffer.handle,
+//         offset = 0,
+//         range  = vk.DeviceSize(buffer.desc.size),
+//     };
 
-bind_to_set :: proc{ bind_buffer_to_set };
+//     set_write := vk.WriteDescriptorSet{
+//         sType           = .WRITE_DESCRIPTOR_SET,
+//         dstSet          = handle,
+//         dstBinding      = u32(binding),
+//         descriptorType  = .UNIFORM_BUFFER,
+//         descriptorCount = 1,
+//         pBufferInfo     = &buffer_info,
+//     };
+
+//     vk.UpdateDescriptorSets(pool.shader.device.logical_gpu, 1, &set_write, 0, nil);
+// }
+
+// bind_texture_to_set :: proc(using set: ^Resource_Set, texture: ^Texture, auto_cast binding : int = 0) {
+//     image_info := vk.DescriptorImageInfo{
+//         imageLayout = .SHADER_READ_ONLY_OPTIMAL,
+//         imageView   = texture.view,
+//         sampler     = texture.sampler,
+//     };
+
+//     set_write := vk.WriteDescriptorSet{
+//         sType           = .WRITE_DESCRIPTOR_SET,
+//         dstSet          = handle,
+//         dstBinding      = u32(binding),
+//         descriptorType  = .COMBINED_IMAGE_SAMPLER,
+//         descriptorCount = 1,
+//         pImageInfo     = &image_info,
+//     };
+
+//     vk.UpdateDescriptorSets(pool.shader.device.logical_gpu, 1, &set_write, 0, nil);
+// }
+
+// bind_to_set :: proc{ bind_buffer_to_set, bind_texture_to_set };
 
 }

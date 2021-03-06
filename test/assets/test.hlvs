@@ -1,9 +1,14 @@
 struct Vertex {
     float3 position : POSITION;
-    float4 color : COLOR;
+    float3 normal   : NORMAL;
+    float2 uv0      : TEXCOORD0;
+    float2 uv1      : TEXCOORD1;
+    float4 color    : COLOR;
 };
 
 struct Vertex_Output {
+    float2 uv0   : TEXCOORD0;
+    float2 uv1   : TEXCOORD1;
     float4 color : COLOR;
     float4 position : SV_Position;
 };
@@ -18,7 +23,10 @@ Vertex_Output main( Vertex IN ) {
     Vertex_Output OUT;
 
     OUT.position = mul(projection, mul(view, mul(world, float4(IN.position.xyz, 1.0))));
-    OUT.color = float4(IN.color.xyz, 1.0);
+    OUT.color.x = IN.uv0.x;
+    OUT.color.y = IN.uv0.y;
+    OUT.uv0 = IN.uv0;
+    OUT.uv1 = IN.uv1;
 
     return OUT;
 }

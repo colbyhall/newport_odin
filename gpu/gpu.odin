@@ -212,6 +212,20 @@ Texture_Layout :: enum {
     Present,
 }
 
+// All supported texture wraps
+// 
+// TODO(colby): Add more of these
+Texture_Wrap :: enum {
+    Clamp,
+    Repeat,
+}
+
+// All supported texture filtering
+Texture_Filter :: enum {
+    Nearest, // Also known as point sampling
+    Linear,
+}
+
 //
 // Render Pass API
 ////////////////////////////////////////////////////
@@ -272,20 +286,6 @@ format_stride :: proc(format: Format) -> int {
     case .BGR_U8_SRGB:   return 3;
     case: unreachable();
     }
-}
-
-// All supported texture wraps
-// 
-// TODO(colby): Add more of these
-Texture_Wrap :: enum {
-    Clamp,
-    Repeat,
-}
-
-// All supported texture filtering
-Texture_Filtering :: enum {
-    Nearest, // Also known as point sampling
-    Linear,
 }
 
 Draw_Mode :: enum {

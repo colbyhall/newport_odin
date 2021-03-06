@@ -12,6 +12,7 @@ import "core:fmt"
 import "core:math/linalg"
 
 Vector3 :: core.Vector3;
+Vector2 :: core.Vector2;
 Linear_Color :: core.Linear_Color;
 v2 :: core.v2;
 v3 :: core.v3;
@@ -25,32 +26,16 @@ Rect :: core.Rect;
 rect_pos_size :: core.rect_pos_size;
 ortho :: core.ortho;
 translate :: linalg.matrix4_translate;
-
-// ax + bx + dx = w
-Plane :: core.Vector4;
-
-plane_dot :: proc(a: Plane, b: Vector3) -> f32 {
-    return a.x * b.x + a.y * b.y + a.z * b.z - a.w;
-}
-
-ray_plane_intersection :: proc(origin, dir: Vector3, p: Plane) -> (impact: Vector3, hit: bool) {
-    pn := v3(p.x, p.y, p.z);
-    pd := plane_dot(p, origin);
-
-    if pd > 1e-6 {
-        hit = dot(pn, dir) < 0;
-        if hit do impact = origin + dir * pd;
-        return;
-    }
-
-    hit = true;
-    impact = origin + pn * -pd;
-
-    return;
-}
+Quaternion :: core.Quaternion;
 
 Vertex :: struct {
     position : Vector3,
+    
+    normal   : Vector3,
+    
+    uv0      : Vector2,
+    uv1      : Vector2,
+
     color    : Linear_Color,
 }
 
@@ -100,15 +85,11 @@ main :: proc() {
     // Make graphics pipeline
     pipeline : ^gpu.Pipeline;
     {
-
         shaders := []^gpu.Shader{ frag_shader, vert_shader };
         pipeline_desc := gpu.make_pipeline_description(render_pass, typeid_of(Vertex), shaders);
 
         pipeline = gpu.make_graphics_pipeline(device, pipeline_desc);
     }
-
-    resource_set_pool := gpu.make_resource_set_pool(vert_shader, 1);
-    resource_set := gpu.allocate_resource_set(resource_set_pool, 0);
 
     Constant_Buffer :: struct {
         projection, view, world : Matrix4,
@@ -122,16 +103,34 @@ main :: proc() {
 
     vertices := []Vertex{
         Vertex{
-            position = v3(200, 0, -20),
+            position = v3(-0.5, -0.5, 0),
             color    = core.green,
+            uv0      = v2(1, 0),
         },
         Vertex{ 
-            position = v3(450, 500, -20),
+            position = v3(-0.5, 0.5, 0),
             color    = core.red,
+            uv0      = v2(0, 0),
         },
         Vertex{
-            position = v3(700, 0, -20),
+            position = v3(0.5, 0.5, 0),
             color    = core.blue,
+            uv0      = v2(0, 1),
+        },
+        Vertex{
+            position = v3(-0.5, -0.5, 0),
+            color    = core.green,
+            uv0      = v2(1, 0),
+        },
+        Vertex{ 
+            position = v3(0.5, 0.5, 0),
+            color    = core.red,
+            uv0      = v2(0, 1),
+        },
+        Vertex{
+            position = v3(0.5, -0.5, 0),
+            color    = core.blue,
+            uv0      = v2(1, 1),
         }
     };
 
@@ -150,18 +149,27 @@ main :: proc() {
 
     gfx := gpu.make_graphics_context(device);
 
+    cam_pos : Vector3;
+    cam_rot : Quaternion;
+
     core.show_window(&the_engine.window, true);
 
     for engine.is_running() {
         engine.dispatch_input();
 
+        FOV :: 90;
+
+        viewport := engine.viewport();
+        aspect_ratio := viewport.max.x / viewport.max.y;
+
         x : Constant_Buffer;
-        x.world = MATRIX4_IDENTITY;
+        x.world = core.translate(v3(0, 0, -1));
+        x.projection = core.persp(FOV, aspect_ratio, 0.1, 1000.0);
+        x.view = core.mul(core.translate(-cam_pos), core.quat_to_mat4(cam_rot));
 
-        x.projection, x.view = render_right_handed(engine.viewport());
-
-        gpu.copy_to_buffer(constant_buffer, &x);
-        gpu.bind_to_set(resource_set, constant_buffer);
+        // gpu.copy_to_buffer(constant_buffer, &x);
+        // gpu.bind_to_set(vert_resource_set, constant_buffer);
+        // gpu.bind_to_set(frag_resource_set, test_texture);
 
         // Record command buffer
         backbuffer, acquire_receipt := gpu.acquire_backbuffer(device);
@@ -170,9 +178,12 @@ main :: proc() {
             {
                 gpu.render_pass_scope(gfx, render_pass, backbuffer);
 
+                gpu.clear(gfx, core.white, backbuffer);
+
                 gpu.bind_pipeline(gfx, pipeline, v2(backbuffer.width, backbuffer.height));
 
-                gpu.bind_resource_set(gfx, resource_set);
+                // gpu.bind_resource_set(gfx, vert_resource_set, 0);
+                // gpu.bind_resource_set(gfx, frag_resource_set, 0);
 
                 gpu.bind_vertex_buffer(gfx, vertex_buffer);
                 
@@ -186,17 +197,4 @@ main :: proc() {
 
         gpu.wait(device);
     }
-}
-
-// TEMP
-render_right_handed :: proc(viewport: Rect, near : f32 = 0.1, far : f32 = 1000.0) -> (proj: Matrix4, view: Matrix4) {
-    using core;
-
-    _, draw_size := rect_pos_size(viewport);
-    aspect_ratio := draw_size.x / draw_size.y;
-    ortho_size   := draw_size.y / 2;
-
-    proj = ortho(ortho_size, aspect_ratio, near, far);
-    view = translate(v3(-draw_size.x / 2.0, -ortho_size, 0));
-    return;
 }
