@@ -10,6 +10,7 @@ import "core:runtime"
 import "core:os"
 import "core:sync"
 import "core:slice"
+import "core:time"
 
 import "vk"
 import "../core"
@@ -251,6 +252,11 @@ init_vulkan :: proc(the_window: ^core.Window) -> ^Device {
         }
     }
 
+    // Setup bindless texture buffer
+    {
+        loaded_textures = make_atomic_array(^Texture, 1024 * 4);
+    }
+
     recreate_swapchain(device, true);
 
     // Bindless layout
@@ -258,22 +264,22 @@ init_vulkan :: proc(the_window: ^core.Window) -> ^Device {
         bindless_layout := []vk.DescriptorSetLayoutBinding{
             {
                 binding         = 0, 
-                descriptorType  = .STORAGE_BUFFER,
+                descriptorType  = .SAMPLED_IMAGE,
                 descriptorCount = 1000,
-                stageFlags      = { ._MAX },
+                stageFlags      = { .VERTEX, .FRAGMENT },
             },
             {
                 binding         = 1, 
-                descriptorType  = .SAMPLED_IMAGE,
-                descriptorCount = 1000,
-                stageFlags      = { ._MAX },
-            },
-            {
-                binding         = 2, 
                 descriptorType  = .SAMPLER,
                 descriptorCount = 1000,
-                stageFlags      = { ._MAX },
+                stageFlags      = { .VERTEX, .FRAGMENT },
             },
+            // {
+            //     binding         = 0, 
+            //     descriptorType  = .STORAGE_BUFFER,
+            //     descriptorCount = 1000,
+            //     stageFlags      = { .VERTEX, .FRAGMENT },
+            // },
             // {
             //     binding         = 3, 
             //     descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
@@ -283,12 +289,16 @@ init_vulkan :: proc(the_window: ^core.Window) -> ^Device {
         };
 
         // Bindless settings extension stuff
-        bind_flag : vk.DescriptorBindingFlags = { .PARTIALLY_BOUND_EXT };
+        bind_flags := []vk.DescriptorBindingFlags{ 
+            { .PARTIALLY_BOUND_EXT },
+            { .PARTIALLY_BOUND_EXT },
+            { .PARTIALLY_BOUND_EXT },
+        };
 
         extension := vk.DescriptorSetLayoutBindingFlagsCreateInfo{
             sType         = .DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO_EXT,
-            bindingCount  = 1,
-            pBindingFlags = &bind_flag,
+            bindingCount  = u32(len(bindless_layout)),
+            pBindingFlags = &bind_flags[0],
         };
 
         create_info := vk.DescriptorSetLayoutCreateInfo{
@@ -510,7 +520,50 @@ Device :: struct {
     descriptor_set    : vk.DescriptorSet,
     descriptor_layout : vk.DescriptorSetLayout,
 
+    loaded_textures : Atomic_Array(^Texture),
+    active_textures : []^Texture, // used for bindless setup
+
     swapchain : Maybe(Swapchain),
+}
+
+update_bindless :: proc(using device: ^Device) {
+    if len(active_textures) > 0 do delete(active_textures);
+
+    active_textures = gather_atomic_array(&loaded_textures);
+    image_infos := make([]vk.DescriptorImageInfo, len(active_textures), context.temp_allocator);
+    sampler_infos := make([]vk.DescriptorImageInfo, len(active_textures), context.temp_allocator);
+
+    for it, i in active_textures {
+        image_infos[i].imageView   = it.view;
+        image_infos[i].imageLayout = .SHADER_READ_ONLY_OPTIMAL;
+
+        sampler_infos[i].sampler = it.sampler;
+    }
+
+    images_set_write := vk.WriteDescriptorSet{
+        sType           = .WRITE_DESCRIPTOR_SET,
+        dstSet          = descriptor_set,
+        dstBinding      = 0,
+        descriptorType  = .SAMPLED_IMAGE,
+        descriptorCount = u32(len(image_infos)),
+        pImageInfo      = &image_infos[0],
+    };
+
+    samplers_set_write := vk.WriteDescriptorSet{
+        sType           = .WRITE_DESCRIPTOR_SET,
+        dstSet          = descriptor_set,
+        dstBinding      = 1,
+        descriptorType  = .SAMPLER,
+        descriptorCount = u32(len(sampler_infos)),
+        pImageInfo      = &sampler_infos[0],
+    };
+
+    set_writes := []vk.WriteDescriptorSet{
+        images_set_write,
+        samplers_set_write
+    };
+
+    vk.UpdateDescriptorSets(logical_gpu, u32(len(set_writes)), &set_writes[0], 0, nil);
 }
 
 Thread_Info :: struct {
@@ -545,7 +598,85 @@ get_thread_info :: proc(using device: ^Device) -> ^Thread_Info {
 acquire_semaphore :: proc(using device: ^Device) -> vk.Semaphore {
     index := sync.atomic_add(&current_semaphore, 1, .Relaxed) % len(receipt_semaphores);
 
-    return receipt_semaphores[index];
+    semaphore := receipt_semaphores[index];
+    vk.DestroySemaphore(logical_gpu, semaphore, nil);
+
+    create_info := vk.SemaphoreCreateInfo{
+        sType = .SEMAPHORE_CREATE_INFO,
+    };
+    result := vk.CreateSemaphore(logical_gpu, &create_info, nil, &semaphore);
+    assert(result == .SUCCESS);
+
+    receipt_semaphores[index] = semaphore;
+
+    return semaphore;
+}
+
+Atomic_Array_Element :: struct(T: typeid) {
+    // Atomic
+    used     : bool,
+    updating : bool,
+
+    value : T,
+}
+
+Atomic_Array :: struct(T: typeid) {
+    buffer : []Atomic_Array_Element(T),
+    count  : int, // Atomic
+}
+
+make_atomic_array :: proc($T: typeid, auto_cast max: int) -> Atomic_Array(T) {
+    buffer := make([]Atomic_Array_Element(T), max);
+    return Atomic_Array(T){ buffer = buffer, };
+}
+
+insert_atomic_array :: proc(array: ^Atomic_Array($E), e: E) -> bool {
+    buffer_len := len(array.buffer);
+    count := sync.atomic_load(&array.count, .Relaxed);
+    if count >= buffer_len do return false;
+
+    for it in &array.buffer {
+        used := sync.atomic_load(&it.used, .Relaxed);
+        if used do continue;
+
+        _, ok := sync.atomic_compare_exchange_weak(&it.used, false, true, .Sequentially_Consistent, .Relaxed);
+        if !ok do continue;
+
+        _, ok = sync.atomic_compare_exchange_weak(&it.updating, false, true, .Sequentially_Consistent, .Relaxed);
+        if !ok do continue;
+
+        it.value = e;
+
+        sync.atomic_store(&it.updating, false, .Relaxed);
+        sync.atomic_add(&array.count, 1, .Relaxed);
+        return true;
+    }
+
+    return false;
+}
+
+gather_atomic_array :: proc(array: ^Atomic_Array($E), allocator := context.allocator) -> []E {
+    buffer_len := len(array.buffer);
+    count := sync.atomic_load(&array.count, .Relaxed);
+    assert(count <= buffer_len);
+
+    if count == 0 do return []E{  };
+
+    result := make([]E, count, allocator);
+    count = 0;
+    for it in &array.buffer {
+        used := sync.atomic_load(&it.used, .Relaxed);
+        if !used do continue;
+
+        _, ok := sync.atomic_compare_exchange_weak(&it.updating, false, true, .Sequentially_Consistent, .Relaxed);
+        if !ok do continue;
+
+        result[count] = it.value;
+        count += 1;
+        
+        sync.atomic_store(&it.updating, false, .Relaxed);   
+    }
+    return result;
 }
 
 acquire_backbuffer :: proc(using device: ^Device) -> (^Texture, Receipt) {
@@ -599,7 +730,6 @@ submit_multiple :: proc(using device: ^Device, contexts: []^Context, wait_on: ..
     }
 
     vk.QueueSubmit(graphics_queue, 1, &submit_info, 0);
-
 
     return Receipt{ signal };
 }
@@ -796,7 +926,7 @@ register_texture :: proc() {
         defer(delete(source));
 
         width, height, stride : i32;
-        pixels := stbi.load_from_memory(&source[0], i32(len(source)), &width, &height, &stride, 4);
+        pixels := stbi.load_from_memory(&source[0], i32(len(source)), &width, &height, &stride, 0);
         if pixels == nil {
             log.error("[Asset] Failed to decode raw from \"{}\"", texture.raw_path);
             return false;
@@ -830,11 +960,13 @@ register_texture :: proc() {
         device := get().current;
 
         contents := transmute([]byte)mem.Raw_Slice{ pixels, int(width * height * stride) };
+
         contents_buffer := make_buffer(device, Buffer_Description{ 
             usage  = { .Transfer_Src }, 
             memory = .Host_Visible,
             size   = len(contents),
         });
+        copy_to_buffer(contents_buffer, contents);
 
         init_texture(device, texture);
 
@@ -846,7 +978,9 @@ register_texture :: proc() {
             copy(gfx, texture, contents_buffer);
             resource_barrier(gfx, texture, .Transfer_Dst, .Shader_Read_Only);
         }
+
         submit(device, gfx);
+        wait(device);
 
         return true;
     }
@@ -885,7 +1019,6 @@ init_texture :: proc(using device: ^Device, texture: ^Texture) {
         height = u32(texture.height),
         depth  = u32(texture.depth),
     };
-
 
     image : vk.Image;
     {
@@ -1011,6 +1144,8 @@ init_texture :: proc(using device: ^Device, texture: ^Texture) {
     texture.sampler = sampler;
 
     texture.memory = memory; 
+
+    insert_atomic_array(&loaded_textures, texture);
 }
 
 make_texture :: proc(using device: ^Device, desc: Texture_Description) -> ^Texture {
@@ -1273,8 +1408,6 @@ bind_pipeline :: proc(using ctx: ^Context, pipeline: ^Pipeline, viewport: Vector
 }
 
 bind_vertex_buffer :: proc(using ctx: ^Context, b: ^Buffer) {
-    b := b;
-
     offset : vk.DeviceSize;
     vk.CmdBindVertexBuffers(command_buffer, 0, 1, &b.handle, &offset);
 }
@@ -1282,12 +1415,6 @@ bind_vertex_buffer :: proc(using ctx: ^Context, b: ^Buffer) {
 draw :: proc(using ctx: ^Context, auto_cast vertex_count: int, auto_cast first_vertex := 0) {
     vk.CmdDraw(command_buffer, u32(vertex_count), 1, u32(first_vertex), 0);
 }
-
-// bind_resource_set :: proc(using ctx: ^Context, set: ^Resource_Set, bind: int) {
-//     assert(current_pipeline != nil, "Pipeline must be bound to bind resource set");
-
-//     vk.CmdBindDescriptorSets(command_buffer, .GRAPHICS, current_pipeline.layout, u32(bind), 1, &set.handle, 0, nil);
-// }
 
 clear :: proc(using ctx: ^Context, color: Linear_Color, attachments: ..^Texture) {
     assert(len(current_attachments) > 0);

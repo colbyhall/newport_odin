@@ -105,7 +105,7 @@ main :: proc() {
         Vertex{
             position = v3(-0.5, -0.5, 0),
             color    = core.green,
-            uv0      = v2(1, 0),
+            uv0      = v2(0, 1),
         },
         Vertex{ 
             position = v3(-0.5, 0.5, 0),
@@ -115,17 +115,17 @@ main :: proc() {
         Vertex{
             position = v3(0.5, 0.5, 0),
             color    = core.blue,
-            uv0      = v2(0, 1),
+            uv0      = v2(1, 0),
         },
         Vertex{
             position = v3(-0.5, -0.5, 0),
             color    = core.green,
-            uv0      = v2(1, 0),
+            uv0      = v2(0, 1),
         },
         Vertex{ 
             position = v3(0.5, 0.5, 0),
             color    = core.red,
-            uv0      = v2(0, 1),
+            uv0      = v2(1, 0),
         },
         Vertex{
             position = v3(0.5, -0.5, 0),
@@ -167,23 +167,17 @@ main :: proc() {
         x.projection = core.persp(FOV, aspect_ratio, 0.1, 1000.0);
         x.view = core.mul(core.translate(-cam_pos), core.quat_to_mat4(cam_rot));
 
-        // gpu.copy_to_buffer(constant_buffer, &x);
-        // gpu.bind_to_set(vert_resource_set, constant_buffer);
-        // gpu.bind_to_set(frag_resource_set, test_texture);
-
         // Record command buffer
         backbuffer, acquire_receipt := gpu.acquire_backbuffer(device);
+        gpu.update_bindless(device);
         {
             gpu.record(gfx);
             {
                 gpu.render_pass_scope(gfx, render_pass, backbuffer);
 
-                gpu.clear(gfx, core.white, backbuffer);
+                gpu.clear(gfx, core.green, backbuffer);
 
                 gpu.bind_pipeline(gfx, pipeline, v2(backbuffer.width, backbuffer.height));
-
-                // gpu.bind_resource_set(gfx, vert_resource_set, 0);
-                // gpu.bind_resource_set(gfx, frag_resource_set, 0);
 
                 gpu.bind_vertex_buffer(gfx, vertex_buffer);
                 

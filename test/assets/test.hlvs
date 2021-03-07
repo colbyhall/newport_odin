@@ -1,3 +1,6 @@
+Texture2D    all_textures[] : register(t0);
+SamplerState all_samplers[] : register(s1);
+
 struct Vertex {
     float3 position : POSITION;
     float3 normal   : NORMAL;
@@ -9,22 +12,13 @@ struct Vertex {
 struct Vertex_Output {
     float2 uv0   : TEXCOORD0;
     float2 uv1   : TEXCOORD1;
-    float4 color : COLOR;
     float4 position : SV_Position;
 };
-
-cbuffer ubo : register(b0) {
-    float4x4 projection;
-    float4x4 view;
-    float4x4 world;
-}
 
 Vertex_Output main( Vertex IN ) {
     Vertex_Output OUT;
 
-    OUT.position = mul(projection, mul(view, mul(world, float4(IN.position.xyz, 1.0))));
-    OUT.color.x = IN.uv0.x;
-    OUT.color.y = IN.uv0.y;
+    OUT.position = float4(IN.position.xyz, 1.0);
     OUT.uv0 = IN.uv0;
     OUT.uv1 = IN.uv1;
 
