@@ -6,10 +6,17 @@ struct Pixel_Input {
     float2 uv1   : TEXCOORD1;
 };
 
+struct Constants {
+    float4x4 render;
+    float4x4 world;
+    uint     tex;
+};
+[[vk::push_constant]] ConstantBuffer<Constants> constants;
+
 float4 main( Pixel_Input IN ) : SV_TARGET {
 
-    Texture2D my_texture = all_textures[0];
-    SamplerState my_sampler = all_samplers[0];
+    Texture2D    my_texture = all_textures[constants.tex];
+    SamplerState my_sampler = all_samplers[constants.tex];
 
     float4 color = my_texture.Sample(my_sampler, IN.uv0, 0);
     // float4 color = float4(IN.uv0.x, IN.uv0.y, 0, 1);

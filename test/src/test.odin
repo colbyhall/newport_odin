@@ -82,24 +82,26 @@ main :: proc() {
     test_texture, found = asset.acquire("assets/test.texture", gpu.Texture);
     assert(found);
 
+    asset.acquire("assets/jerry.texture", gpu.Texture);
+    asset.acquire("assets/dog.texture", gpu.Texture);
+    asset.acquire("assets/patrick.texture", gpu.Texture);
+    asset.acquire("assets/spongebob.texture", gpu.Texture);
+
+    Constants :: struct {
+        render : Matrix4,
+        world  : Matrix4,
+        tex    : u32,
+    };
+
     // Make graphics pipeline
     pipeline : ^gpu.Pipeline;
     {
         shaders := []^gpu.Shader{ frag_shader, vert_shader };
         pipeline_desc := gpu.make_pipeline_description(render_pass, typeid_of(Vertex), shaders);
+        pipeline_desc.push_constant_size = size_of(Constants);
 
         pipeline = gpu.make_graphics_pipeline(device, pipeline_desc);
     }
-
-    Constant_Buffer :: struct {
-        projection, view, world : Matrix4,
-    };
-
-    constant_buffer := gpu.make_buffer(device, gpu.Buffer_Description{
-        usage  = { .Constants },
-        memory = .Host_Visible,
-        size   = size_of(Constant_Buffer),
-    });
 
     vertices := []Vertex{
         Vertex{
@@ -149,7 +151,7 @@ main :: proc() {
 
     gfx := gpu.make_graphics_context(device);
 
-    cam_pos : Vector3;
+    cam_pos := v3(0, 0, 2);
     cam_rot : Quaternion;
 
     core.show_window(&the_engine.window, true);
@@ -162,10 +164,9 @@ main :: proc() {
         viewport := engine.viewport();
         aspect_ratio := viewport.max.x / viewport.max.y;
 
-        x : Constant_Buffer;
-        x.world = core.translate(v3(0, 0, -1));
-        x.projection = core.persp(FOV, aspect_ratio, 0.1, 1000.0);
-        x.view = core.mul(core.translate(-cam_pos), core.quat_to_mat4(cam_rot));
+        projection := core.persp(FOV, aspect_ratio, 0.1, 1000.0);
+        view := core.mul(core.translate(-cam_pos), core.quat_to_mat4(cam_rot));
+
 
         // Record command buffer
         backbuffer, acquire_receipt := gpu.acquire_backbuffer(device);
@@ -175,13 +176,28 @@ main :: proc() {
             {
                 gpu.render_pass_scope(gfx, render_pass, backbuffer);
 
-                gpu.clear(gfx, core.green, backbuffer);
+                gpu.clear(gfx, core.black, backbuffer);
 
                 gpu.bind_pipeline(gfx, pipeline, v2(backbuffer.width, backbuffer.height));
 
                 gpu.bind_vertex_buffer(gfx, vertex_buffer);
+
+                positions := []Vector3{
+                    v3(3, 0, 0),
+                    v3(-2, 1, 0),
+                    v3(4, 2, 0),
+                    v3(-1, -2, 0),
+                    v3(0, 2, 0),
+                };
+
+                for _, i in device.active_textures {
+                    world := core.translate(positions[i]);
+
+                    x := Constants{ render = core.mul(projection, view), world = world, tex = u32(i) };
+                    gpu.push_constants(gfx, &x);
+                    gpu.draw(gfx, len(vertices));
+                }
                 
-                gpu.draw(gfx, len(vertices));
             }
             gpu.resource_barrier(gfx, backbuffer, .Color_Attachment, .Present);
         }

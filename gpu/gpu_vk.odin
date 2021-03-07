@@ -954,6 +954,8 @@ register_texture :: proc() {
             }
         }
 
+        if stride == 3 do return false;
+
         texture.memory_type = .Device_Local;
         texture.usage = { .Transfer_Dst, .Sampled };
 
@@ -1167,6 +1169,7 @@ Context :: struct {
     framebuffers   : [dynamic]vk.Framebuffer,
 
     current_render_pass : ^Render_Pass,
+    current_pipeline    : ^Pipeline,
     current_attachments : []^Texture,
 }
 
@@ -1369,6 +1372,8 @@ end_render_pass :: proc(using ctx: ^Context) {
     vk.CmdEndRenderPass(command_buffer);
 
     current_render_pass = nil;
+    current_pipeline    = nil;
+
     delete(current_attachments);
 }
 
@@ -1379,6 +1384,8 @@ render_pass_scope :: proc(using ctx: ^Context, render_pass: ^Render_Pass, attach
 }
 
 bind_pipeline :: proc(using ctx: ^Context, pipeline: ^Pipeline, viewport: Vector2, scissor: Maybe(Rect) = nil) {
+    current_pipeline = pipeline;
+
     vk.CmdBindPipeline(command_buffer, .GRAPHICS, pipeline.handle);
     vk.CmdBindDescriptorSets(command_buffer, .GRAPHICS, pipeline.layout, 0, 1, &device.descriptor_set, 0, nil);
 
@@ -1454,6 +1461,12 @@ clear :: proc(using ctx: ^Context, color: Linear_Color, attachments: ..^Texture)
     };
 
     vk.CmdClearAttachments(command_buffer, u32(len(attachments)), &clear_attachments[0], 1, &clear_rect);
+}
+
+push_constants :: proc(using ctx: ^Context, t: ^$T) {
+    assert(current_pipeline.description.push_constant_size == size_of(T));
+
+    vk.CmdPushConstants(command_buffer, current_pipeline.layout, { .VERTEX, .FRAGMENT }, 0, u32(size_of(T)), t); 
 }
 
 //
@@ -1887,6 +1900,18 @@ make_graphics_pipeline :: proc(using device: ^Device, using description: Pipelin
         setLayoutCount = 1,
         pSetLayouts    = &descriptor_layout,
     };
+
+    if push_constant_size > 0 {
+        // assert(push_constant_size <= 128); // Min push constant size
+
+        range := vk.PushConstantRange{
+            size       = u32(push_constant_size),
+            stageFlags = { .VERTEX, .FRAGMENT },
+        };
+
+        pipeline_layout_info.pushConstantRangeCount = 1;
+        pipeline_layout_info.pPushConstantRanges    = &range;
+    }
 
     layout : vk.PipelineLayout;
     result := vk.CreatePipelineLayout(logical_gpu, &pipeline_layout_info, nil, &layout);

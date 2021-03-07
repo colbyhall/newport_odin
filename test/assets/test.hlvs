@@ -15,10 +15,17 @@ struct Vertex_Output {
     float4 position : SV_Position;
 };
 
+struct Constants {
+    float4x4 render;
+    float4x4 world;
+    uint     tex;
+};
+[[vk::push_constant]] ConstantBuffer<Constants> constants;
+
 Vertex_Output main( Vertex IN ) {
     Vertex_Output OUT;
 
-    OUT.position = float4(IN.position.xyz, 1.0);
+    OUT.position = mul(constants.render, mul(constants.world, float4(IN.position.xyz, 1.0)));
     OUT.uv0 = IN.uv0;
     OUT.uv1 = IN.uv1;
 

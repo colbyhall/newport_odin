@@ -370,6 +370,8 @@ Pipeline_Description :: struct {
     depth_test    : bool,
     depth_write   : bool,
     depth_compare : Compare_Op,
+
+    push_constant_size : int,
 }
 
 make_pipeline_description_graphics :: proc(render_pass: ^Render_Pass, vertex: typeid, shaders: []^Shader) -> Pipeline_Description {
