@@ -1,5 +1,4 @@
-Texture2D    all_textures[] : register(t0);
-SamplerState all_samplers[] : register(s1);
+#include "core.hlsl"
 
 struct Pixel_Input {
     float2 uv0   : TEXCOORD0;

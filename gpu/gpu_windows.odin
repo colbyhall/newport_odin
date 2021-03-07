@@ -7,6 +7,7 @@ import "core:sys/win32"
 import "core:time"
 import "core:mem"
 import "core:log"
+import "core:fmt"
 
 import "../deps/dxc"
 
@@ -139,6 +140,11 @@ compile_into_shader_cache :: proc(source: []u8, using shader: ^Shader) -> (conte
     assert(err == 0);
     defer utils->Release();
 
+    include_handler : ^IDxcIncludeHandler;
+    err = utils->CreateDefaultIncludeHandler(&include_handler);
+    assert(err == 0);
+    defer include_handler->Release();
+
     compiler: ^IDxcCompiler3;
     err = DxcCreateInstance(&CLSID_DxcCompiler, &IDxcCompiler3_GUID, auto_cast &compiler);
     assert(err == 0);
@@ -156,18 +162,25 @@ compile_into_shader_cache :: proc(source: []u8, using shader: ^Shader) -> (conte
     buffer.Size = source_blob->GetBufferSize();
     buffer.Encoding = CP_UTF8;
 
+    profile : win32.Wstring;
+    switch type {
+    case .Pixel:  profile = win32.utf8_to_wstring("ps_6_1");
+    case .Vertex: profile = win32.utf8_to_wstring("vs_6_1");
+    }
+
     // Build the arguments list
     arguments := make([dynamic]win32.Wstring, 0, 12);
     defer delete(arguments);
     {
-        append(&arguments, win32.utf8_to_wstring("-E"));
-        append(&arguments, win32.utf8_to_wstring("main"));
-        append(&arguments, win32.utf8_to_wstring("-T"));
+        i := strings.last_index(path, "\\");
+        if i == -1 do i = strings.last_index(path, "/");
+        dir := path[:i];
 
-        switch type {
-        case .Pixel: append(&arguments, win32.utf8_to_wstring("ps_6_1"));
-        case .Vertex: append(&arguments, win32.utf8_to_wstring("vs_6_1"));
-        }
+        current_dir := os.get_current_directory(context.temp_allocator);
+        final_dir := fmt.tprintf("{}\\{}", current_dir, dir);
+
+        append(&arguments, win32.utf8_to_wstring("-I"));
+        append(&arguments, win32.utf8_to_wstring(final_dir));
 
         append(&arguments, win32.utf8_to_wstring("-Zpc")); // Use column major as the math lib is column major
 
@@ -185,10 +198,26 @@ compile_into_shader_cache :: proc(source: []u8, using shader: ^Shader) -> (conte
         append(&arguments, win32.utf8_to_wstring("-O3"));
     }
 
+    compiler_args : ^IDxcCompilerArgs;
+    source_name := path_lib.base(path);
+    err = utils->BuildArguments(
+        win32.utf8_to_wstring(source_name),
+        win32.utf8_to_wstring("main"),
+        profile,
+        &arguments[0],
+        u32(len(arguments)),
+        nil,
+        0,
+        &compiler_args
+    );
+    assert(err == 0);
+    defer compiler_args->Release();
+
+
     // Compile the actual HLSL using our arguments
     // TODO: Include Handlers
     result : ^IDxcResult;
-    err = compiler->Compile(&buffer, &arguments[0], u32(len(arguments)), nil, &IDxcResult_GUID, auto_cast &result);
+    err = compiler->Compile(&buffer, compiler_args->GetArguments(), compiler_args->GetCount(), include_handler, &IDxcResult_GUID, auto_cast &result);
     assert(err == 0);
     defer result->Release();
 
@@ -205,7 +234,7 @@ compile_into_shader_cache :: proc(source: []u8, using shader: ^Shader) -> (conte
         defer errors->Release();
 
         error := cast(cstring)errors->GetBufferPointer();
-        log.error("[DXC] Compilation Error\n", error);
+        log.errorf("[DXC] Compilation Error\n\n\n{}", error);
         return;
     }
     
