@@ -62,6 +62,7 @@ I really wanted the ability to write shaders once and then have them compile for
 [Using the DirectXShaderCompiler C++ API](https://simoncoenen.com/blog/programming/graphics/DxcCompiling.html)<br>
 [Using the DirectXShaderCompiler C++ API - Revised](https://simoncoenen.com/blog/programming/graphics/DxcRevised.html)<br>
 [Spirv Descriptors](https://github.com/microsoft/DirectXShaderCompiler/blob/master/docs/SPIR-V.rst#descriptors)<br>
+[HLSL for Vulkan](https://antiagainst.github.io/post/hlsl-for-vulkan-resources/)<br>
 
 ## Hardware Abstraction Layer
 This has been something thats been on my mind for years now. The more I dig the deeper I go. This one will be constantly updated. 
@@ -74,8 +75,9 @@ This has been something thats been on my mind for years now. The more I dig the 
 [A modern rendering architecture](https://ourmachinery.com/post/a-modern-rendering-architecture/)<br>
 [A Comparison of Modern Graphics APIs](https://alain.xyz/blog/comparison-of-modern-graphics-apis)<br>
 [Musings on cross-platform graphics engine architectures - Part1](http://www.gijskaerts.com/wordpress/?p=98)<br>
-[Vulkan Guide](https://vkguide.dev/)
-[Vulkan DX12 Comparison](https://gpuopen.com/performance/)
+[Vulkan Guide](https://vkguide.dev/)<br>
+[Vulkan DX12 Comparison](https://gpuopen.com/performance/)<br>
+[OurMachinery Bindless](https://ourmachinery.com/post/moving-the-machinery-to-bindless/)<br>
 
 ### Additional Thoughts
 I'm going to be following in the mindset of Alex Tardif in his article [An Opinionated Post on Modern Rendering Abstraction Layers](http://alextardif.com/RenderingAbstractionLayers.html). I want to keep things as simple as possible and not limit the user too much.
