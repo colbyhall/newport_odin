@@ -5,6 +5,7 @@ import "newport:engine"
 import "newport:asset"
 import "newport:job"
 import "newport:gpu"
+import "newport:draw"
 
 import "core:encoding/json"
 import "core:os"
@@ -51,6 +52,8 @@ main :: proc() {
     // Setup all the gpu stuff including the 
     device := gpu.init(&the_engine.window);
     defer gpu.shutdown();
+
+    draw.register_font_collection();
     
     asset.discover();
 
@@ -78,14 +81,11 @@ main :: proc() {
     frag_shader, found = asset.acquire("assets/test.hlps", gpu.Shader);
     assert(found);
 
-    test_texture : ^gpu.Texture;
-    test_texture, found = asset.acquire("assets/test.texture", gpu.Texture);
+    consola : ^draw.Font_Collection;
+    consola, found = asset.acquire("assets/consola.ttf", draw.Font_Collection);
     assert(found);
 
-    asset.acquire("assets/jerry.texture", gpu.Texture);
-    asset.acquire("assets/dog.texture", gpu.Texture);
-    asset.acquire("assets/patrick.texture", gpu.Texture);
-    asset.acquire("assets/spongebob.texture", gpu.Texture);
+    font := draw.font_at_size(consola, 72);
 
     Constants :: struct {
         render : Matrix4,
@@ -151,7 +151,7 @@ main :: proc() {
 
     gfx := gpu.make_graphics_context(device);
 
-    cam_pos := v3(0, 0, 2);
+    cam_pos := v3(0, 0, 0.5);
     cam_rot : Quaternion;
 
     core.show_window(&the_engine.window, true);
@@ -164,7 +164,7 @@ main :: proc() {
         viewport := engine.viewport();
         aspect_ratio := viewport.max.x / viewport.max.y;
 
-        projection := core.persp(FOV, aspect_ratio, 0.1, 1000.0);
+        projection := core.persp(FOV, aspect_ratio, 0.01, 1000.0);
         view := core.mul(core.translate(-cam_pos), core.quat_to_mat4(cam_rot));
 
 
@@ -182,22 +182,12 @@ main :: proc() {
 
                 gpu.bind_vertex_buffer(gfx, vertex_buffer);
 
-                positions := []Vector3{
-                    v3(3, 0, 0),
-                    v3(-2, 1, 0),
-                    v3(4, 2, 0),
-                    v3(-1, -2, 0),
-                    v3(0, 2, 0),
-                };
 
-                for _, i in device.active_textures {
-                    world := core.translate(positions[i]);
+                world := core.translate(v3());
+                x := Constants{ render = core.mul(projection, view), world = world, tex = 0 };
+                gpu.push_constants(gfx, &x);
 
-                    x := Constants{ render = core.mul(projection, view), world = world, tex = u32(i) };
-                    gpu.push_constants(gfx, &x);
-                    gpu.draw(gfx, len(vertices));
-                }
-                
+                gpu.draw(gfx, len(vertices));
             }
             gpu.resource_barrier(gfx, backbuffer, .Color_Attachment, .Present);
         }

@@ -274,12 +274,12 @@ init_vulkan :: proc(the_window: ^core.Window) -> ^Device {
                 descriptorCount = 1000,
                 stageFlags      = { .VERTEX, .FRAGMENT },
             },
-            // {
-            //     binding         = 0, 
-            //     descriptorType  = .STORAGE_BUFFER,
-            //     descriptorCount = 1000,
-            //     stageFlags      = { .VERTEX, .FRAGMENT },
-            // },
+            {
+                binding         = 2, 
+                descriptorType  = .STORAGE_BUFFER,
+                descriptorCount = 1000,
+                stageFlags      = { .VERTEX, .FRAGMENT },
+            },
             // {
             //     binding         = 3, 
             //     descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
@@ -530,6 +530,8 @@ update_bindless :: proc(using device: ^Device) {
     if len(active_textures) > 0 do delete(active_textures);
 
     active_textures = gather_atomic_array(&loaded_textures);
+    if len(active_textures) == 0 do return;
+    
     image_infos := make([]vk.DescriptorImageInfo, len(active_textures), context.temp_allocator);
     sampler_infos := make([]vk.DescriptorImageInfo, len(active_textures), context.temp_allocator);
 
@@ -972,7 +974,7 @@ register_texture :: proc() {
 
         init_texture(device, texture);
 
-        gfx := make_graphics_context(device);
+        gfx := make_graphics_context(device); // Leak
         {
             record(gfx);
 
@@ -982,7 +984,7 @@ register_texture :: proc() {
         }
 
         submit(device, gfx);
-        wait(device);
+        wait(device); // TODO: Use a fence here
 
         return true;
     }

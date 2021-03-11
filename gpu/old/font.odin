@@ -105,7 +105,7 @@ font_at_size :: proc(using collection: ^Font_Collection, size: f32) -> Font {
     atlas.width  = ATLAS_SIZE; 
     atlas.height = ATLAS_SIZE;
     atlas.depth  = 1;
-    atlas.pixels = make([]u8, atlas.width * atlas.height); // @Leak
+    atlas.pixels = make([]u32, atlas.width * atlas.height); // @Leak
 
     oversample := 1;
     switch {

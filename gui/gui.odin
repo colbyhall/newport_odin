@@ -4,11 +4,11 @@ import "core:reflect"
 
 import "../core"
 import "../engine"
-import "../graphics"
-import "../graphics/draw"
 
 Rect :: core.Rect;
 Linear_Color :: core.Linear_Color;
+Vector3 :: core.Vector3;
+Vector2 :: core.Vector2;
 
 // Unique Id for an instance of widget control
 // 
