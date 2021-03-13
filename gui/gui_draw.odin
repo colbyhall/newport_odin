@@ -48,7 +48,7 @@ destroy_builder :: proc(using b: ^Builder) {
     clear(&indices);
 }
 
-reset_builder :: proc(b: ^Builder) {
+reset_builder :: proc(using b: ^Builder) {
     clear(&vertices);
     clear(&indices);
 }
@@ -57,7 +57,7 @@ builder_len :: proc(b: Builder) -> int {
     return len(b.vertices);
 }
 
-@builder
+@private
 push_raw_rect :: proc(using b: ^Builder, rect: Rect, z: f32, texture: ^gpu.Texture, uv: Rect, color: Linear_Color, type: Vertex_Type) {
     base_index := u32(len(vertices));
 
@@ -154,117 +154,7 @@ builder_to_buffers :: proc(device: ^gpu.Device, b: ^Builder) -> (vertex, index: 
         size   = size_of(u32) * len(b.vertices),
     };
 
-    vertex = make_buffer(device, vertex_desc);
-    index  = make_buffer(device, index_desc);
+    vertex = gpu.make_buffer(device, vertex_desc);
+    index  = gpu.make_buffer(device, index_desc);
     return;
 }
-
-Draw :: struct {
-    pipeline : ^gpu.Pipeline,
-    vertex_shader, pixel_shader : ^gpu.Shader,
-}
-
-@private
-draw: ^Draw;
-
-init_draw :: proc(device: ^gpu.Device) {
-    vertex_shader_source := "
-        Texture2D    all_textures[] : register(t0);
-        SamplerState all_samplers[] : register(s1);
-
-        struct Vertex {
-            float3 position : POSITION;
-            float4 color    : COLOR;
-            
-            float2 uv       : TEXCOORD0;
-            uint   tex;
-
-            uint   type;
-        };
-
-        struct Vertex_Output {
-            float2 uv   : TEXCOORD0;
-            float4 color    : COLOR;
-
-            uint tex;
-            uint type;
-
-            float4 position : SV_Position;
-        };
-
-        struct Constants {
-            float4x4 render;
-        };
-        [[vk::push_constant]] ConstantBuffer<Constants> constants;
-
-        Vertex_Output main( Vertex IN ) {
-            Vertex_Output OUT;
-
-            OUT.position = mul(constants.render, float4(IN.position.xyz, 1.0));
-            
-            OUT.color = IN.color;
-            OUT.uv    = IN.uv;
-            OUT.tex   = IN.tex;
-            OUT.type  = IN.type;
-
-            return OUT;
-        }
-    ";
-
-    pixel_shader_source := "
-        Texture2D    all_textures[] : register(t0);
-        SamplerState all_samplers[] : register(s1);
-
-        #define VT_SOLID_COLOR 1
-        #define VT_TEXTURED 1
-        #define VT_FONT 1
-
-        struct Pixel_Input {
-            float2 uv   : TEXCOORD0;
-            float4 color: COLOR;
-
-            uint tex;
-            uint type;
-        };
-
-        struct Constants {
-            float4x4 render;
-        };
-        [[vk::push_constant]] ConstantBuffer<Constants> constants;
-
-        float4 main( Pixel_Input IN ) : SV_TARGET {
-            Texture2D    my_texture = all_textures[IN.tex];
-            SamplerState my_sampler = all_samplers[IN.tex];
-
-            float color = float4(1, 0, 1, 1);
-
-            if (IN.type == VT_SOLID_COLOR) {
-                color = IN.color;
-            } else if (VT_TEXTURED) {
-                color = my_texture.Sample(my_sampler, IN.uv, 0);
-            } else if (VT_FONT) {
-                // TODO
-            }
-
-            return color;
-        }
-    ";
-
-    draw = new(Draw);
-
-    using draw;
-
-    vertex_shader = gpu.make_shader_from_string(device, vertex_shader_source, .Vertex);
-    pixel_shader = gpu.make_shader_from_string(device, pixel_shader_source, .Pixel);
-    assert(vertex_shader != nil && pixel_shader != nil);
-
-    shaders := []^gpu.Shader{ vertex_shader, pixel_shader};
-
-    pipeline_desc := gpu.Pipeline_Description{
-        shaders = shaders,
-
-        vertex  = type
-    };
-}
-
-

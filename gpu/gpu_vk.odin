@@ -1628,8 +1628,6 @@ shader_type_to_shader_stage :: proc(type: Shader_Type) -> vk.ShaderStageFlag {
     unreachable();
 }
 
-import "core:fmt"
-
 init_shader :: proc(using device: ^Device, shader: ^Shader, contents: []byte) {
     // Create the actual vulkan shader module
     {
@@ -1911,118 +1909,5 @@ make_graphics_pipeline :: proc(using device: ^Device, using description: Pipelin
 }
 
 make_pipeline :: proc{ make_graphics_pipeline };
-
-// Resource_Set_Pool :: struct {
-//     handle : vk.DescriptorPool,
-//     shader : ^Shader,
-// }
-
-// make_resource_set_pool :: proc(using shader: ^Shader, auto_cast max_sets: int) -> ^Resource_Set_Pool {
-//     num_uniforms := 0;
-//     num_combined := 0;
-//     for set in shader.reflect_sets {
-//         for i in 0..<int(set.binding_count) {
-//             binding := mem.ptr_offset(set.bindings, i)^;
-
-//             #partial switch binding.descriptor_type {
-//             case .UNIFORM_BUFFER: num_uniforms += 1;
-//             case .SAMPLED_IMAGE: num_combined += 1;
-//             case .SAMPLER: // Do Nothing
-//             case: unimplemented();
-//             }
-//         }
-//     }
-
-//     uniform_pool_size := vk.DescriptorPoolSize{
-//         type = .UNIFORM_BUFFER,
-//         descriptorCount = u32(num_uniforms),
-//     };
-
-//     combined_pool_size := vk.DescriptorPoolSize{
-//         type = .COMBINED_IMAGE_SAMPLER,
-//         descriptorCount = u32(num_combined),
-//     };
-
-//     pool_sizes := []vk.DescriptorPoolSize{ uniform_pool_size, combined_pool_size };
-
-//     create_info := vk.DescriptorPoolCreateInfo{
-//         sType           = .DESCRIPTOR_POOL_CREATE_INFO,
-//         poolSizeCount   = u32(len(pool_sizes)),
-//         pPoolSizes      = &pool_sizes[0],
-//         maxSets         = u32(max_sets),
-//     };
-
-//     handle : vk.DescriptorPool;
-//     result := vk.CreateDescriptorPool(device.logical_gpu, &create_info, nil, &handle);
-//     assert(result == .SUCCESS);
-
-//     set_pool := new(Resource_Set_Pool);
-//     set_pool^ = Resource_Set_Pool{ handle = handle, shader = shader };
-
-//     return set_pool;
-// }
-
-// Resource_Set :: struct {
-//     handle : vk.DescriptorSet,
-//     pool   : ^Resource_Set_Pool,
-// }
-
-// allocate_resource_set :: proc(pool: ^Resource_Set_Pool, auto_cast set: int) -> ^Resource_Set {
-//     alloc_info := vk.DescriptorSetAllocateInfo{
-//         sType = .DESCRIPTOR_SET_ALLOCATE_INFO,
-//         descriptorPool     = pool.handle,
-//         descriptorSetCount = 1,
-//         pSetLayouts        = &pool.shader.sets[set],
-//     };
-
-//     handle : vk.DescriptorSet;
-//     result := vk.AllocateDescriptorSets(pool.shader.device.logical_gpu, &alloc_info, &handle);
-//     assert(result == .SUCCESS);
-
-//     set := new(Resource_Set);
-//     set^ = Resource_Set{ handle = handle, pool = pool, };
-
-//     return set;
-// }
-
-// bind_buffer_to_set :: proc(using set: ^Resource_Set, buffer: ^Buffer, auto_cast binding : int = 0) {
-//     buffer_info := vk.DescriptorBufferInfo{
-//         buffer = buffer.handle,
-//         offset = 0,
-//         range  = vk.DeviceSize(buffer.desc.size),
-//     };
-
-//     set_write := vk.WriteDescriptorSet{
-//         sType           = .WRITE_DESCRIPTOR_SET,
-//         dstSet          = handle,
-//         dstBinding      = u32(binding),
-//         descriptorType  = .UNIFORM_BUFFER,
-//         descriptorCount = 1,
-//         pBufferInfo     = &buffer_info,
-//     };
-
-//     vk.UpdateDescriptorSets(pool.shader.device.logical_gpu, 1, &set_write, 0, nil);
-// }
-
-// bind_texture_to_set :: proc(using set: ^Resource_Set, texture: ^Texture, auto_cast binding : int = 0) {
-//     image_info := vk.DescriptorImageInfo{
-//         imageLayout = .SHADER_READ_ONLY_OPTIMAL,
-//         imageView   = texture.view,
-//         sampler     = texture.sampler,
-//     };
-
-//     set_write := vk.WriteDescriptorSet{
-//         sType           = .WRITE_DESCRIPTOR_SET,
-//         dstSet          = handle,
-//         dstBinding      = u32(binding),
-//         descriptorType  = .COMBINED_IMAGE_SAMPLER,
-//         descriptorCount = 1,
-//         pImageInfo     = &image_info,
-//     };
-
-//     vk.UpdateDescriptorSets(pool.shader.device.logical_gpu, 1, &set_write, 0, nil);
-// }
-
-// bind_to_set :: proc{ bind_buffer_to_set, bind_texture_to_set };
 
 }

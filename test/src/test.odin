@@ -6,6 +6,7 @@ import "newport:asset"
 import "newport:job"
 import "newport:gpu"
 import "newport:draw"
+import "newport:gui"
 
 import "core:encoding/json"
 import "core:os"

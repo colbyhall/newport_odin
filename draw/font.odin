@@ -85,7 +85,7 @@ font_at_size :: proc(using owner: ^Font_Collection, size: f32, dpi: f32 = 1) -> 
     ascent, descent, line_gap := stbtt.get_font_v_metrics(&info);
     scale := stbtt.scale_for_pixel_height(&info, size);
 
-    BITMAP_SIZE :: 4096;
+    BITMAP_SIZE :: 2048;
     atlas_bitmap := make_bitmap(u8, BITMAP_SIZE, BITMAP_SIZE);
     defer delete_bitmap(atlas_bitmap);
 

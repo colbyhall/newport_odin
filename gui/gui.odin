@@ -1,9 +1,11 @@
 package gui
 
 import "core:reflect"
+import "core:runtime"
+import "core:fmt"
 
 import "../core"
-import "../engine"
+import "../draw"
 
 Rect :: core.Rect;
 Linear_Color :: core.Linear_Color;
@@ -50,8 +52,10 @@ id_int :: proc(auto_cast whole: int) -> Id {
 }
 
 id_loc :: proc(loc := #caller_location) -> Id {
+    to_hash := fmt.tprint(loc);
+
     id : Id;
-    id.whole = int(loc.hash);
+    id.whole = int(runtime.default_hash_string(to_hash));
     return id;
 }
 
@@ -86,7 +90,7 @@ Widget :: struct {
     color     : Linear_Color,
 
     // Scaled to the UI scale
-    font      : Font,
+    font      : draw.Font,
     padding   : Vector2,
     roundness : f32,
 }
@@ -136,14 +140,12 @@ Gui :: struct {
     keys_went_down : [255]bool,
     keys_down      : [255]bool,
 
+    frame : int,
+
     scale : f32,
 }
 
 @private the_gui : Gui;
-
-init :: proc() {
-
-}
 
 begin :: proc(viewport: Rect) {
     using the_gui;
@@ -156,11 +158,12 @@ end :: proc(dt: f32, viewport: Rect) {
 
     clear(&widgets);
     clear(&layouts);
+    frame += 1;
 
     // TODO(colby): Destroy control state after a frame is missed
 }
 
-@(deferred_out=end_gui)
+@(deferred_out=end)
 scoped :: proc(dt: f32, viewport: Rect) -> (f32, Rect) {
     begin(viewport);
     return dt, viewport;
@@ -171,7 +174,7 @@ make_control :: proc(id: Id, $T: typeid) -> ^T {
 
     t := new(T);
     t.variant = t^;
-    t.frame   = engine.get().frame;
+    t.frame   = frame;
 
     controls[id.whole] = t;
     return t;
@@ -202,5 +205,5 @@ find_or_make_control :: proc(id: Id, $T: typeid) -> ^T {
 set_focus :: proc(id: Id) {
     using the_gui;
     focused = id;
-    focuse_was_set = true;
+    focus_was_set = true;
 }
