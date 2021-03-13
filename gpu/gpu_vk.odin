@@ -11,6 +11,7 @@ import "core:os"
 import "core:sync"
 import "core:slice"
 import "core:time"
+import "core:fmt"
 
 import "vk"
 import "../core"
@@ -1630,64 +1631,6 @@ shader_type_to_shader_stage :: proc(type: Shader_Type) -> vk.ShaderStageFlag {
 import "core:fmt"
 
 init_shader :: proc(using device: ^Device, shader: ^Shader, contents: []byte) {
-    // Use Spirv Reflect to retrieve Descriptor info and then build the descriptor layouts
-    // result := spv_reflect.CreateShaderModule(auto_cast len(contents), &contents[0], &shader.reflect_module);
-    // assert(result == .SUCCESS);
-
-    // count : u32;
-    // result = spv_reflect.EnumerateDescriptorSets(&shader.reflect_module, &count, nil);
-    // assert(result == .SUCCESS);
-
-    // if count > 0 {
-    //     shader.reflect_sets = make([]^spv_reflect.DescriptorSet, int(count));
-        
-    //     result = spv_reflect.EnumerateDescriptorSets(&shader.reflect_module, &count, &shader.reflect_sets[0]);
-    //     assert(result == .SUCCESS);
-
-    //     shader.sets = make([]vk.DescriptorSetLayout, int(count));
-    //     for it, i in shader.reflect_sets {
-    //         bindings := make([]vk.DescriptorSetLayoutBinding, int(it.binding_count), context.temp_allocator);
-
-    //         at := 0;            
-    //         for _, i in bindings {
-    //             actual := mem.ptr_offset(it.bindings, i)^;
-
-    //             binding := &bindings[at];
-
-    //             binding.binding         = actual.binding;
-    //             binding.descriptorType  = auto_cast actual.descriptor_type;
-    //             binding.descriptorCount = actual.count;
-
-    //             if i > 0  {
-    //                 previous := mem.ptr_offset(it.bindings, i - 1)^;
-
-    //                 if actual.descriptor_type == .SAMPLER && previous.descriptor_type == .SAMPLED_IMAGE {
-    //                     count -= 1;
-    //                     break;
-    //                 }
-    //             }
-                
-    //             if actual.descriptor_type == .SAMPLED_IMAGE {
-    //                 binding.descriptorType = .COMBINED_IMAGE_SAMPLER;
-    //             }
-
-    //             at += 1;
-
-    //             stage := shader_type_to_shader_stage(shader.type);
-    //             binding.stageFlags = { stage };
-    //         }
-
-    //         create_info := vk.DescriptorSetLayoutCreateInfo{
-    //             sType        = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-    //             bindingCount = u32(at),
-    //             pBindings    = &bindings[0],
-    //         };
-
-    //         result := vk.CreateDescriptorSetLayout(logical_gpu, &create_info, nil, &shader.sets[i]);
-    //         assert(result == .SUCCESS);
-    //     }
-    // }
-
     // Create the actual vulkan shader module
     {
         create_info := vk.ShaderModuleCreateInfo{
@@ -1701,6 +1644,20 @@ init_shader :: proc(using device: ^Device, shader: ^Shader, contents: []byte) {
     }
 
     shader.device = device;
+}
+
+make_shader_from_string :: proc(using device: ^Device, source: string, type: Shader_Type, loc := #caller_location) -> ^Shader {
+    s := new(Shader);
+    s.path = fmt.aprintf("{}", loc);
+
+    contents, found := find_in_shader_cache(s);
+    if !found {
+        contents, found = compile_into_shader_cache(transmute([]u8)source, s);
+        if !found do return nil;
+    }
+
+    init_shader(device, s, contents);
+    return s;
 }
 
 //

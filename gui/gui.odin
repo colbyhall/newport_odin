@@ -9,6 +9,8 @@ Rect :: core.Rect;
 Linear_Color :: core.Linear_Color;
 Vector3 :: core.Vector3;
 Vector2 :: core.Vector2;
+v2 :: core.v2;
+v3 :: core.v3;
 
 // Unique Id for an instance of widget control
 // 
