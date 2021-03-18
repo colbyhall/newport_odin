@@ -23,59 +23,59 @@ norm         :: linalg.normalize;
 dot          :: linalg.dot;
 cross        :: linalg.vector_cross;
 
-Vector2 :: linalg.Vector2;
+Vector2 :: linalg.Vector2f32;
 
-v2xy :: inline proc(x, y: f32) -> Vector2 {
+v2xy :: proc(x, y: f32) -> Vector2 {
     return Vector2 { x, y };
 }
 
-v2s :: inline proc(xy: f32) -> Vector2 {
+v2s :: proc(xy: f32) -> Vector2 {
     return v2xy(xy, xy);
 }
 
-v2z :: inline proc() -> Vector2 {
+v2z :: proc() -> Vector2 {
     return v2s(0);
 }
 
-v2xyi :: inline proc(auto_cast x, y: int) -> Vector2 {
+v2xyi :: proc(auto_cast x, y: int) -> Vector2 {
     return v2xy(f32(x), f32(y));
 }
 
 v2 :: proc { v2xy, v2s, v2z, v2xyi };
 
-Vector3 :: linalg.Vector3;
+Vector3 :: linalg.Vector3f32;
 
-v3xyz :: inline proc(x, y, z: f32) -> Vector3 {
+v3xyz :: proc(x, y, z: f32) -> Vector3 {
     return Vector3 { x, y, z };
 }
 
-v3s :: inline proc(xyz: f32) -> Vector3 {
+v3s :: proc(xyz: f32) -> Vector3 {
     return v3xyz(xyz, xyz, xyz);
 }
 
-v3z :: inline proc() -> Vector3 {
+v3z :: proc() -> Vector3 {
     return v3s(0.0);
 }
 
-v3xy_z :: inline proc(xy: Vector2, z: f32) -> Vector3 {
+v3xy_z :: proc(xy: Vector2, z: f32) -> Vector3 {
     return v3xyz(xy.x, xy.y, z);
 }
 
 v3 :: proc { v3xyz, v3s, v3z, v3xy_z };
 
-Vector4 :: linalg.Vector4;
+Vector4 :: linalg.Vector4f32;
 
-v4s :: inline proc(xyzw : f32 = 0) -> Vector4 {
+v4s :: proc(xyzw : f32 = 0) -> Vector4 {
     return Vector4{ xyzw, xyzw, xyzw, xyzw };
 }
 
-v4xyzw :: inline proc(x, y, z, w: f32) -> Vector4 {
+v4xyzw :: proc(x, y, z, w: f32) -> Vector4 {
     return Vector4{ x, y, z, w };
 }
 
 v4 :: proc { v4s, v4xyzw };
 
-Matrix4 :: linalg.Matrix4;
+Matrix4 :: linalg.Matrix4f32;
 
 // NOTE: I've gone back and rewritten the projection functions for property 0 - 1 Z clipping
 ortho :: proc(size, aspect_ratio, near, far: f32, flip_z_axis := true) -> Matrix4 {
@@ -110,18 +110,18 @@ inverse      :: linalg.matrix4_inverse;
 quat_to_mat4 :: linalg.matrix4_from_quaternion;
 mul          :: linalg.mul;
 
-Quaternion   :: linalg.Quaternion;
+Quaternion   :: linalg.Quaternionf32;
 
 slerp        :: linalg.quaternion_slerp;
 angle_axis   :: linalg.quaternion_angle_axis;
 
-MATRIX4_IDENTITY :: linalg.MATRIX4_IDENTITY;
+MATRIX4_IDENTITY :: linalg.MATRIX4F32_IDENTITY;
 
 Rect :: struct {
     min, max : Vector2,
 }
 
-rect_pos_size :: inline proc(using rect: Rect) -> (pos: Vector2, size: Vector2) {
+rect_pos_size :: proc(using rect: Rect) -> (pos: Vector2, size: Vector2) {
     size = v2(max.x - min.x, max.y - min.y);
     pos  = min + size / 2;
     return;

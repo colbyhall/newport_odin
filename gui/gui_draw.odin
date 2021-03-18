@@ -12,12 +12,9 @@ Vertex_Type :: enum u32 {
 
 Vertex :: struct {
     position  : Vector3,
-    
     color     : Linear_Color,
-
     uv        : Vector2,
     tex       : u32,
-
     type      : Vertex_Type,
 }
 
@@ -39,6 +36,8 @@ make_builder_cap :: proc(cap: int, allocator := context.allocator) -> Builder {
         indices  = make([dynamic]u32, 0, cap, allocator),
     };
 }
+
+make_builder :: proc{ make_builder_none, make_builder_cap };
 
 destroy_builder :: proc(using b: ^Builder) {
     delete(vertices);
@@ -137,7 +136,7 @@ push_solid_rect :: proc(using b: ^Builder, rect: Rect, z: f32, color: Linear_Col
     push_raw_rect(b, rect, z, nil, uv, color, .Solid_Color);
 }
 
-push_rect :: proc{ push_textured_rect };
+push_rect :: proc{ push_textured_rect, push_texture_rect_simple, push_solid_rect };
 
 builder_to_buffers :: proc(device: ^gpu.Device, b: ^Builder) -> (vertex, index: ^gpu.Buffer) {
     assert(builder_len(b^) > 0);
@@ -151,10 +150,14 @@ builder_to_buffers :: proc(device: ^gpu.Device, b: ^Builder) -> (vertex, index: 
     index_desc := gpu.Buffer_Description{
         usage  = { .Index },
         memory = .Host_Visible,
-        size   = size_of(u32) * len(b.vertices),
+        size   = size_of(u32) * len(b.indices),
     };
 
     vertex = gpu.make_buffer(device, vertex_desc);
     index  = gpu.make_buffer(device, index_desc);
+
+    gpu.copy_to_buffer(vertex, b.vertices[:]);
+    gpu.copy_to_buffer(index, b.indices[:]);
     return;
 }
+

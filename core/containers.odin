@@ -22,10 +22,10 @@ delete_float_heap :: proc(using heap: Float_Heap($E)) {
     delete(heap.buckets);
 }
 
-heap_parent  :: inline proc(index: int) -> int { return index / 2; }
-heap_left    :: inline proc(index: int) -> int { return index * 2; }
-heap_right   :: inline proc(index: int) -> int { return index * 2 + 1; }
-heap_is_leaf :: inline proc(index, count: int) -> bool { return index >= count / 2 && index <= count; }
+heap_parent  :: proc(index: int) -> int { return index / 2; }
+heap_left    :: proc(index: int) -> int { return index * 2; }
+heap_right   :: proc(index: int) -> int { return index * 2 + 1; }
+heap_is_leaf :: proc(index, count: int) -> bool { return index >= count / 2 && index <= count; }
 
 float_heap_minify :: proc(using heap: ^Float_Heap($E), index: int) {
     if heap_is_leaf(index, len(buckets) - 1) do return;

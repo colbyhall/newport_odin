@@ -971,6 +971,8 @@ register_texture :: proc() {
             memory = .Host_Visible,
             size   = len(contents),
         });
+        defer delete_buffer(contents_buffer);
+
         copy_to_buffer(contents_buffer, contents);
 
         init_texture(device, texture);
@@ -1359,7 +1361,7 @@ begin_render_pass :: proc(using ctx: ^Context, render_pass: ^Render_Pass, attach
     }
 
     // Append framebuffer to framebuffers
-    append(&framebuffers, framebuffer);
+    append(&framebuffers, framebuffer); // Leak
 
     begin_info := vk.RenderPassBeginInfo{
         sType           = .RENDER_PASS_BEGIN_INFO,

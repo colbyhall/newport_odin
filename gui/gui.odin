@@ -61,7 +61,7 @@ id_loc :: proc(loc := #caller_location) -> Id {
 
 id :: proc{ id_any, id_any_index, id_int, id_loc };
 
-id_equals :: inline proc(a, b: Id) -> bool { return a.whole == b.whole; }
+id_equals :: proc(a, b: Id) -> bool { return a.whole == b.whole; }
 
 nil_id :: Id{};
 
